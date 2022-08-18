@@ -1,3 +1,4 @@
+
 #include <complex.h>
 #include <math.h>
 #include <stdio.h>
@@ -11,7 +12,7 @@
 
 void SetBlockInRealArray(float (*block)[1024], int ncols,
     int nrows, int nreflects);
-void conv2(int (*target)[512], float (*kernel)[512], int rt, int ct, int rk, int ck);
+void conv2(uint8_t (*target)[512], float (*kernel)[512], int rt, int ct, int rk, int ck);
 void RealtoComplex(float (*RealArray)[1024],
     std::complex<float> (*OutputArray)[1024], int nrows, int ncols);
 void convolution(std::complex<float> (*target)[1024],
@@ -24,7 +25,7 @@ void Test()
 {
     auto kernel = new float[512][512];
     int rk = 3, ck = 3;
-    auto target = new int[512][512];
+    auto target = new uint8_t[512][512];
 
     std::cout << "   HERE";
 
@@ -38,21 +39,33 @@ void Test()
     kernel[1][2] = 1.0 / 3.0;
     kernel[1][2] = 1.0 / 3.0;
 
+    cv::Mat noisy = cv::imread("noisy.png");
+    cv::cvtColor(noisy, noisy, cv::COLOR_BGR2GRAY);
+    //noisy.convertTo(c0, CV_8UC1);
 
     for (int irow = 0; irow < 512; irow++)
     {
         for (int icol = 0; icol < 512; icol++)
         {
-            //target[irow][icol]=(int) std::rand()%255;
+            //target[irow][icol]=(int)std::rand()%255;
+            target[irow][icol] = noisy.at<uint8_t>(irow, icol);
         }
     }
-    //conv2(target,kernel,512,512, rk, ck );
+    //cv::imwrite("noisy_debug.png", noisy);
+    noisy.release();
+
+    conv2(target,kernel,512,512, rk, ck );
+
+    cv::Mat denoised(512, 512, CV_8UC1, target);
+    cv::imwrite("denoised.png", denoised);
+    denoised.release();
+
     delete[] target;
     delete[] kernel;
 
 }
 
-void conv2(int (*target)[512], float (*kernel)[512], int rt, int ct, int rk, int ck)
+void conv2(uint8_t (*target)[512], float (*kernel)[512], int rt, int ct, int rk, int ck)
 {
     auto tArray = new float[1024][1024];
     auto kArray = new float[1024][1024];
@@ -276,5 +289,5 @@ int main() {
 
     Test();
 
-
+    _CrtDumpMemoryLeaks();
 }
