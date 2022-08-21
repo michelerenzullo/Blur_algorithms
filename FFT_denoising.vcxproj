@@ -149,9 +149,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Source.cpp" />
+    <ClCompile Include="tinyfiledialogs.c" />
+    <ClCompile Include="UtilitiesGeneral.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Recolour.h" />
+    <ClInclude Include="tinyfiledialogs.h" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="denoised.png" />

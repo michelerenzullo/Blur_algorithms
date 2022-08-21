@@ -10,56 +10,55 @@
 #include "Recolour.h"
 
 
-void SetBlockInRealArray(float(*block)[1024], int ncols,
-	int nrows, int nreflects);
+void AddPadding(float(*block)[1024], int rows, int ncols, int nreflects);
 void conv2(uint8_t(*target)[512], float(*kernel)[512], int rt, int ct, int rk, int ck);
-void RealtoComplex(float(*RealArray)[1024],
-	std::complex<float>(*OutputArray)[1024], int nrows, int ncols);
 void convolution(std::complex<float>(*target)[1024],
 	std::complex<float>(*kernel)[1024]);
 void FFT2D(std::complex<float>(*array)[1024], int nrows, int ncols, int sign);
-void FFT(std::complex<float> Fdata[], int n, int sign);
+void FFT(std::complex<float>(*Fdata), int n, int sign);
 
 
-void Test()
+void Test(cv::Mat monoimage)
 {
 	auto kernel = new float[512][512];
-	int rk = 3, ck = 3;
+
+	int nsmooth = 5;
+
+	int rk = nsmooth;
+	int ck = nsmooth;
+
+	for (int irows = 0; irows < rk; irows++)
+	{
+		for (int icols = 0; icols < ck; icols++)
+		{
+			kernel[irows][icols] = 1.0 / (float)(rk * ck);
+		}
+	}
+
+
 	auto target = new uint8_t[512][512];
-
-	std::cout << "   HERE";
-
-	kernel[0][0] = 1.0 / 3.0;
-	kernel[1][0] = 1.0 / 3.0;
-	kernel[2][0] = 1.0 / 3.0;
-	kernel[0][1] = 1.0 / 3.0;
-	kernel[1][1] = 1.0 / 3.0;
-	kernel[2][1] = 1.0 / 3.0;
-	kernel[0][2] = 1.0 / 3.0;
-	kernel[1][2] = 1.0 / 3.0;
-	kernel[1][2] = 1.0 / 3.0;
-
-	cv::Mat noisy = cv::imread("noisy.png");
-	cv::cvtColor(noisy, noisy, cv::COLOR_BGR2GRAY);
-	//noisy.convertTo(c0, CV_8UC1);
 
 	for (int irow = 0; irow < 512; irow++)
 	{
 		for (int icol = 0; icol < 512; icol++)
 		{
-			//target[irow][icol]=(int)std::rand()%255;
-			target[irow][icol] = noisy.at<uint8_t>(irow, icol);
+			target[irow][icol] = monoimage.at<uint8_t>(irow, icol);
 		}
 	}
-	//cv::imwrite("noisy_debug.png", noisy);
-	noisy.release();
+	SaveImage(monoimage, "Mono in", 1, 0, 0);
 
+	// The inputs have been set up. Now do
+	// the convolution and display the output.
 	conv2(target, kernel, 512, 512, rk, ck);
 
-	cv::Mat denoised(512, 512, CV_8UC1, target);
-	cv::imwrite("denoised.png", denoised);
-	denoised.release();
-
+	for (int irow = 0; irow < 512; irow++)
+	{
+		for (int icol = 0; icol < 512; icol++)
+		{
+			monoimage.at<uint8_t>(irow, icol) = target[irow][icol];
+		}
+	}
+	SaveImage(monoimage, "Mono out", 1, 1, 0);
 	delete[] target;
 	delete[] kernel;
 
@@ -73,33 +72,69 @@ void conv2(uint8_t(*target)[512], float(*kernel)[512], int rt, int ct, int rk, i
 	auto kComplex = new std::complex<float>[1024][1024];
 
 
+	int d = 1024;
+
+	// Set arrays to zero
+	for (int irow = 0; irow < d; irow++)
+	{
+		for (int icol = 0; icol < d; icol++)
+		{
+			tArray[irow][icol] = 0.0;
+			kArray[irow][icol] = 0.0;
+		}
+	}
+
+	// Write the input data into centre of an array.
+	int rOffset = (d / 2 + 1) - int(rt / 2);
+	int cOffset = (d / 2 + 1) - int(ct / 2);
+
 	for (int irow = 0; irow < rt; irow++)
 	{
 		for (int icol = 0; icol < ct; icol++)
 		{
-			tArray[irow][icol] = (float)target[irow][icol];
+			tArray[irow + rOffset][icol + cOffset]
+				= (float)target[irow][icol];
 		}
 
 	}
+	// Bulk out by reflection at edges.
+	//
+	AddPadding(tArray, rt, ct, cv::max(rk / 2, ck / 2));
+
+	// Write the kernel into an array centered on (0,0)
 	for (int irow = 0; irow < rk; irow++)
 	{
+		int rval = (d + irow - int(rk / 2)) % d;
 		for (int icol = 0; icol < ck; icol++)
 		{
-			kArray[irow][icol] = kernel[irow][icol];
+			int cval = (d + icol - int(ck / 2)) % d;
+			kArray[rval][cval] = kernel[irow][icol];
 		}
 
 	}
-	SetBlockInRealArray(tArray, rt, rt, rk / 2);
-	SetBlockInRealArray(kArray, rk, rk, 0);
-	RealtoComplex(tArray, tComplex, 1024, 1024);
-	RealtoComplex(kArray, kComplex, 1024, 1024);
+
+
+	// Represent arrays as complex variables
+	for (int irow = 0; irow < d; irow++)
+	{
+		for (int icol = 0; icol < d; icol++)
+		{
+			tComplex[irow][icol] = std::complex<float>(tArray[irow][icol], 0.0);
+			kComplex[irow][icol] = std::complex<float>(kArray[irow][icol], 0.0);
+		}
+	}
+
+	// Convolve arrays
 	convolution(tComplex, kComplex);
 
+	// Return convolved data as output.
 	for (int irow = 0; irow < 512; irow++)
 	{
+		int ri = irow + rOffset;
 		for (int icol = 0; icol < 512; icol++)
 		{
-			target[irow][icol] = (int)std::real(tComplex[irow + 257][icol + 257]) + 0.5;
+			int ci = icol + cOffset;
+			target[irow][icol] = (uint8_t)std::real(tComplex[ri][ci]) + 0.01;
 		}
 
 	}
@@ -110,63 +145,39 @@ void conv2(uint8_t(*target)[512], float(*kernel)[512], int rt, int ct, int rk, i
 
 }
 
-void SetBlockInRealArray(float(*block)[1024], int ncols, int nrows, int nreflects)
+void AddPadding(float(*block)[1024], int nrows, int ncols, int nreflects)
 {
-	int rval = (1024 / 2 + 1) + nrows / 2;
-	for (int irow = nrows - 1; irow >= 0; irow--)
-	{
-		int cval = (1024 / 2 + 1) + ncols / 2;
-		for (int icol = ncols; icol >= 0; icol--)
-		{
-			block[rval][cval] = block[irow][icol];
-			cval--;
-		}
-		rval--;
-	}
+	// Pad out input image by reflection.
 	if (nreflects > 0)
 	{
 		int rval = (1024 / 2 + 1) - nrows / 2;
 		int cval = (1024 / 2 + 1) - ncols / 2;
 
-		for (int irow = -nreflects + rval; irow >= (nreflects + rval + nrows); irow++)
+
+		for (int irow = rval - nreflects; irow < (rval + nrows + nreflects); irow++)
 		{
 			int c2 = cval + nreflects;
 			for (int c = cval - nreflects; c < cval; c++)
 			{
 				block[irow][c] = block[irow][c2];
-				block[irow][c2 + ncols] = block[irow][c + ncols];
+				block[irow][c2 + ncols - 1] = block[irow][c + ncols - 1];
 				c2--;
 			}
 		}
 
-		for (int icol = -nreflects + cval; icol >= (nreflects + cval + ncols); icol++)
+		for (int icol = cval - nreflects; icol < (cval + ncols + nreflects); icol++)
 		{
 			int r2 = rval + nreflects;
 			for (int r = rval - nreflects; r < rval; r++)
 			{
-				block[icol][r] = block[icol][r2];
-				block[icol][r2 + ncols] = block[icol][r + ncols];
+				block[r][icol] = block[r2][icol];
+				block[r2 + nrows - 1][icol] = block[r + nrows - 1][icol];
 				r2--;
 			}
 		}
 
 	}
 
-}
-
-
-
-void RealtoComplex(float(*RealArray)[1024], std::complex<float>(*OutputArray)[1024], int nrows, int ncols)
-{
-	for (int irow = 0; irow < nrows; irow++)
-	{
-		for (int icol = 0; icol < ncols; icol++)
-		{
-			OutputArray[irow][icol] = std::complex<float>(RealArray[irow][icol], 0.0);
-		}
-
-	}
-	return;
 }
 
 
@@ -178,21 +189,44 @@ void RealtoComplex(float(*RealArray)[1024], std::complex<float>(*OutputArray)[10
 
 void convolution(std::complex<float>(*target)[1024], std::complex<float>(*kernel)[1024])
 {
+	// FFT the two arrays, multiply together and find inverse FFT of product.
+	// Multiplication in the frequency domain is a convolution in the image domain.
+
 	FFT2D(target, 1024, 1024, 1);
 	FFT2D(kernel, 1024, 1024, 1);
+
+	int testmode = 1;
+	int includeifft = 1;
 
 	for (int irow = 0; irow < 1024; irow++)
 	{
 		for (int icol = 0; icol < 1024; icol++)
 		{
-			target[irow][icol] = target[irow][icol] * kernel[irow][icol];
+
+			if (testmode == 1)
+			{
+				//Convolution
+				target[irow][icol] = target[irow][icol] * kernel[irow][icol];
+			}
+			if (testmode == 2)
+			{
+				// Write across only
+				target[irow][icol] = target[irow][icol];
+			}
+			if (testmode == 3)
+			{
+				// Scaled kernel;  (2295=255*9)
+				target[irow][icol] = std::complex<float>(2295, 0) * kernel[irow][icol];
+			}
 		}
 	}
-	FFT2D(target, 1024, 1024, -1);
+	if (includeifft == 1)
+	{
+		FFT2D(target, 1024, 1024, -1);
+	}
+
 
 }
-
-
 
 
 
@@ -205,6 +239,7 @@ void FFT2D(std::complex<float>(*array)[1024], int nrows, int ncols, int sign)
 {
 	std::complex<float> temp[1024];
 
+	// FFT row by row
 	for (int irow = 0; irow < nrows; irow++)
 	{
 		for (int icol = 0; icol < ncols; icol++)
@@ -219,6 +254,7 @@ void FFT2D(std::complex<float>(*array)[1024], int nrows, int ncols, int sign)
 		}
 	}
 
+	//FFT the resultant column by column
 	for (int icol = 0; icol < ncols; icol++)
 	{
 		for (int irow = 0; irow < nrows; irow++)
@@ -235,7 +271,7 @@ void FFT2D(std::complex<float>(*array)[1024], int nrows, int ncols, int sign)
 
 }
 
-void FFT(std::complex<float> Fdata[], int n, int sign)
+void FFT(std::complex<float>(*Fdata), int n, int sign)
 {
 	// sign =1 for forward FFT, -1 for inverse
 
@@ -280,6 +316,7 @@ void FFT(std::complex<float> Fdata[], int n, int sign)
 			}
 			u = u * w;
 		}
+
 	}
 	if (sign == -1)  for (i = 0; i < n; i++) Fdata[i] = Fdata[i] / float(n);
 	return;
@@ -287,7 +324,10 @@ void FFT(std::complex<float> Fdata[], int n, int sign)
 
 int main() {
 
-	Test();
+	cv::Mat noisy = cv::imread("noisy.png");
+	cv::cvtColor(noisy, noisy, cv::COLOR_BGR2GRAY);
+	Test(noisy);
+	noisy.release();
 
 	_CrtDumpMemoryLeaks();
 }
