@@ -12,8 +12,7 @@
 
 void AddPadding(float(*block)[1024], int rows, int ncols, int nreflects);
 void conv2(uint8_t(*target)[512], float(*kernel)[512], int rt, int ct, int rk, int ck);
-void convolution(std::complex<float>(*target)[1024],
-	std::complex<float>(*kernel)[1024]);
+void convolution(std::complex<float>(*target)[1024], std::complex<float>(*kernel)[1024]);
 void FFT2D(std::complex<float>(*array)[1024], int nrows, int ncols, int sign);
 void FFT(std::complex<float>(*Fdata), int n, int sign);
 
@@ -66,23 +65,11 @@ void Test(cv::Mat monoimage)
 
 void conv2(uint8_t(*target)[512], float(*kernel)[512], int rt, int ct, int rk, int ck)
 {
-	auto tArray = new float[1024][1024];
-	auto kArray = new float[1024][1024];
-	auto tComplex = new std::complex<float>[1024][1024];
-	auto kComplex = new std::complex<float>[1024][1024];
-
-
-	int d = 1024;
-
-	// Set arrays to zero
-	for (int irow = 0; irow < d; irow++)
-	{
-		for (int icol = 0; icol < d; icol++)
-		{
-			tArray[irow][icol] = 0.0;
-			kArray[irow][icol] = 0.0;
-		}
-	}
+	const int d = 1024;
+	auto tArray = new float[d][d]();
+	auto kArray = new float[d][d]();
+	auto tComplex = new std::complex<float>[d][d];
+	auto kComplex = new std::complex<float>[d][d];
 
 	// Write the input data into centre of an array.
 	int rOffset = (d / 2 + 1) - int(rt / 2);
@@ -104,8 +91,7 @@ void conv2(uint8_t(*target)[512], float(*kernel)[512], int rt, int ct, int rk, i
 	// Write the kernel into an array centered on (0,0)
 	for (int irow = 0; irow < rk; irow++)
 	{
-		int rval = (d + irow - int(rk / 2)) % d;
-		for (int icol = 0; icol < ck; icol++)
+		for (int icol = 0, rval = ((d + irow - int(rk / 2)) % d); icol < ck; icol++)
 		{
 			int cval = (d + icol - int(ck / 2)) % d;
 			kArray[rval][cval] = kernel[irow][icol];
@@ -130,8 +116,7 @@ void conv2(uint8_t(*target)[512], float(*kernel)[512], int rt, int ct, int rk, i
 	// Return convolved data as output.
 	for (int irow = 0; irow < 512; irow++)
 	{
-		int ri = irow + rOffset;
-		for (int icol = 0; icol < 512; icol++)
+		for (int icol = 0, ri = irow + rOffset; icol < 512; icol++)
 		{
 			int ci = icol + cOffset;
 			target[irow][icol] = (uint8_t)std::real(tComplex[ri][ci]) + 0.01;
@@ -153,26 +138,21 @@ void AddPadding(float(*block)[1024], int nrows, int ncols, int nreflects)
 		int rval = (1024 / 2 + 1) - nrows / 2;
 		int cval = (1024 / 2 + 1) - ncols / 2;
 
-
 		for (int irow = rval - nreflects; irow < (rval + nrows + nreflects); irow++)
 		{
-			int c2 = cval + nreflects;
-			for (int c = cval - nreflects; c < cval; c++)
+			for (int c = cval - nreflects, c2 = cval + nreflects; c < cval; c++, c2--)
 			{
 				block[irow][c] = block[irow][c2];
 				block[irow][c2 + ncols - 1] = block[irow][c + ncols - 1];
-				c2--;
 			}
 		}
 
 		for (int icol = cval - nreflects; icol < (cval + ncols + nreflects); icol++)
 		{
-			int r2 = rval + nreflects;
-			for (int r = rval - nreflects; r < rval; r++)
+			for (int r = rval - nreflects, r2 = rval + nreflects; r < rval; r++, r2--)
 			{
 				block[r][icol] = block[r2][icol];
 				block[r2 + nrows - 1][icol] = block[r + nrows - 1][icol];
-				r2--;
 			}
 		}
 
@@ -324,8 +304,7 @@ void FFT(std::complex<float>(*Fdata), int n, int sign)
 
 int main() {
 
-	cv::Mat noisy = cv::imread("noisy.png");
-	cv::cvtColor(noisy, noisy, cv::COLOR_BGR2GRAY);
+	cv::Mat noisy = cv::imread("test/noisy.png", cv::IMREAD_GRAYSCALE);
 	Test(noisy);
 	noisy.release();
 
