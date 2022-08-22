@@ -30,7 +30,7 @@ void Test(cv::Mat monoimage)
 	{
 		for (int icols = 0; icols < ck; icols++)
 		{
-			kernel[irows][icols] = 1.0 / (float)(rk * ck);
+			kernel[irows][icols] = 1.f / (rk * ck);
 		}
 	}
 
@@ -44,6 +44,7 @@ void Test(cv::Mat monoimage)
 			target[irow][icol] = monoimage.at<uint8_t>(irow, icol);
 		}
 	}
+
 	SaveImage(monoimage, "Mono in", 1, 0, 0);
 
 	// The inputs have been set up. Now do
