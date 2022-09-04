@@ -87,6 +87,8 @@ void make_kernel(float* kernel, int kLen, const size_t iFTsize[])
 
 void pocketfft_(cv::Mat image, int nsmooth)
 {
+	//pocketfft can handle non-small prime numbers decomposition of ndata but becomes slower, pffft cannot handle them and force you to add more pad
+
 	image.convertTo(image, CV_32FC3);
 	size_t pad = nsmooth * nsmooth - 1;
 	//pad = 0;
@@ -101,6 +103,8 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	make_kernel(kernel.data(), (nsmooth * nsmooth), sizes);
 
 	start_0 = std::chrono::steady_clock::now();
+
+	/* arguments settings */
 	pocketfft::shape_t shape{ sizes[0] , sizes[1] };
 
 	pocketfft::stride_t strided(shape.size());
@@ -120,9 +124,11 @@ void pocketfft_(cv::Mat image, int nsmooth)
 		test_tmpf_out *= test[i];
 	}
 
-	std::vector<std::complex<float>> kerf(sizes[0] * (sizes[1] / 2 + 1));
-	pocketfft::shape_t axes{ 0, 1 };
+	pocketfft::shape_t axes{ 0, 1 }; //argument setting to perform a 2D FFT so we can use 2 threads, instead of 1 . Output is the same, but faster
+	/* end of arguments settings */
 
+	std::vector<std::complex<float>> kerf(sizes[0] * (sizes[1] / 2 + 1));
+	
 	pocketfft::r2c(shape, strided, test_strided_out, axes, pocketfft::FORWARD, kernel.data(), kerf.data(), 1.f, 0);
 	//start_0 = std::chrono::steady_clock::now();
 
@@ -131,6 +137,7 @@ void pocketfft_(cv::Mat image, int nsmooth)
 		std::vector<std::complex<float>> resf(sizes[0] * (sizes[1] / 2 + 1));
 		pocketfft::r2c(shape, strided, test_strided_out, axes, pocketfft::FORWARD, (float*)temp[i].data, resf.data(), 1.f, 0);
 
+		//multiply kernel float with result float using std::transform
 		transform(begin(kerf), end(kerf), begin(resf), begin(resf), std::multiplies<std::complex<float>>());
 
 		/*
@@ -139,8 +146,10 @@ void pocketfft_(cv::Mat image, int nsmooth)
 				resf[i * (sizes[1] / 2 + 1) + j] *= kerf[i * (sizes[1] / 2 + 1) + j];
 			}*/
 
+		//inverse the FFT
 		pocketfft::c2r(shape, test_strided_out, strided, axes, pocketfft::BACKWARD, resf.data(), (float*)temp[i].data, 1.f / ndata, 0);
 
+		//just for debugging to print the FFT image
 		//transform(begin(resf), end(resf), &((float*)temp[i].data)[0], [](std::complex<float> i) { return std::real(i); });
 		/*
 		for (int row = 0; row < SIZE; ++row)
@@ -151,14 +160,13 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	printf("PocketFFT: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 	cv::merge(temp, 3, image);
 
-
 	image.convertTo(image, CV_8UC3);
 	cv::Rect myroi(pad, pad, sizes[1] - pad * 2, sizes[0] - pad * 2);
 	cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
 
 }
 
-void pffft_(cv::Mat image, int nsmooth, bool fast_ = true)
+void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 {
 
 	image.convertTo(image, CV_32FC3);
@@ -189,7 +197,7 @@ void pffft_(cv::Mat image, int nsmooth, bool fast_ = true)
 
 	start_0 = std::chrono::steady_clock::now();
 
-	bool fast_convolve = fast_;
+	bool fast_convolve = fast;
 
 	pffft::AlignedVector<float> kerf;
 	pffft::AlignedVector<std::complex<float>> kerf_complex;
@@ -211,6 +219,7 @@ void pffft_(cv::Mat image, int nsmooth, bool fast_ = true)
 		//std::cout << fft.getLength() << " " << fft.getSpectrumSize() << " " << fft.getInternalLayoutSize() << "\n";
 		std::copy(&((float*)temp[i].data)[0], &((float*)temp[i].data)[ndata], resf[i].begin());
 		temp[i].release();
+		//if fast_convolve no z-domain reordering, so it's faster than the normal process, is written in their APIs
 		if (fast_convolve) {
 			pffft::AlignedVector<float> work = fft.internalLayoutVector();
 			fft.forwardToInternalLayout(resf[i], work);
@@ -223,9 +232,6 @@ void pffft_(cv::Mat image, int nsmooth, bool fast_ = true)
 			fft.forward(resf[i], work);
 			transform(begin(kerf_complex), end(kerf_complex), begin(work), begin(work), [&ndata](auto& n, auto& m) { return n * m * (1.f / ndata); });
 			fft.inverse(work, resf[i]);
-			//pffft::AlignedVector<std::complex<float>> work = fft.spectrumVector();
-			//fftshift1D(work_.data(), work.data(), sizes[0] * sizes[1]);
-			//transform(begin(work), end(work), resf[i].begin(), [](std::complex<float> i) { return std::real(i); });
 			work.clear();
 		}
 		temp[i] = cv::Mat(sizes[0], sizes[1], CV_32F, resf[i].data());
