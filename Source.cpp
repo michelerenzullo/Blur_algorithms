@@ -66,6 +66,18 @@ uint32_t crc32c(uint8_t* data, size_t bytes)
 	return crc ^ 0xFFFFFFFF;
 }
 
+void make_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
+{
+	double scale = 1. / (kLen * kLen * kLen * kLen);
+	for (int irow = -kLen + 1; irow <= (kLen - 1); irow++)
+	{
+		for (int icol = -kLen + 1; icol <= (kLen - 1); icol++) {
+			int kval = (kLen - abs(irow)) * (kLen - abs(icol));
+			kernel[(icol + iFTsize) % iFTsize] += std::clamp(kval * scale, 0., 1.);
+		}
+	}
+}
+
 void make_kernel(float* kernel, int kLen, const size_t iFTsize[])
 {
 	const double scale = 1. / ((float)kLen * (float)kLen * (float)kLen * (float)kLen);
@@ -78,7 +90,7 @@ void make_kernel(float* kernel, int kLen, const size_t iFTsize[])
 			double kval = ((kLen - abs(irow)) * (kLen - abs(icol)));
 			int rval = (irow + iFTsize[0]) % iFTsize[0];
 			int cval = (icol + iFTsize[1]) % iFTsize[1];
-			kernel[rval * iFTsize[1] + cval] = kval * scale;
+			kernel[rval * iFTsize[1] + cval] += kval * scale;
 		}
 	}
 	printf("crc32: %02X\n", crc32c((uint8_t*)kernel, iFTsize[0] * iFTsize[1] * sizeof(float)));
@@ -99,55 +111,54 @@ void pocketfft_(cv::Mat image, int nsmooth)
 
 	int ndata = sizes[0] * sizes[1];
 
-	std::vector<float> kernel(sizes[0] * sizes[1]);
-	make_kernel(kernel.data(), (nsmooth * nsmooth), sizes);
-
 	start_0 = std::chrono::steady_clock::now();
 
 	/* arguments settings */
 	pocketfft::shape_t shape{ sizes[0] , sizes[1] };
-
-	pocketfft::stride_t strided(shape.size());
-	size_t tmpf = sizeof(float);
-	for (int i = shape.size() - 1; i >= 0; --i)
-	{
-		strided[i] = tmpf;
-		tmpf *= shape[i];
-	}
-
-	size_t test_tmpf_out = sizeof(std::complex<float>);
-	std::vector test{ sizes[0], (sizes[1] / 2 + 1) };
-	pocketfft::stride_t test_strided_out(test.size());
-	for (int i = test.size() - 1; i >= 0; --i)
-	{
-		test_strided_out[i] = test_tmpf_out;
-		test_tmpf_out *= test[i];
-	}
-
+	pocketfft::stride_t strided_in{ (ptrdiff_t)(sizeof(float) * sizes[1]), sizeof(float) };
+	pocketfft::stride_t strided_out{ (ptrdiff_t)(sizeof(std::complex<float>) * (sizes[1] / 2 + 1)), sizeof(std::complex<float>) };
 	pocketfft::shape_t axes{ 0, 1 }; //argument setting to perform a 2D FFT so we can use 2 threads, instead of 1 . Output is the same, but faster
-	/* end of arguments settings */
 
-	std::vector<std::complex<float>> kerf(sizes[0] * (sizes[1] / 2 + 1));
+	//kernel 2 x 1D
+	pocketfft::stride_t strided_1D{ sizeof(float) };
+	pocketfft::stride_t strided_out_1D{ sizeof(std::complex<float>) };
+	pocketfft::shape_t axes_1D{ 0 };
+	pocketfft::shape_t shape_row{ sizes[0] };
+	pocketfft::shape_t shape_col{ sizes[1] };
 
-	pocketfft::r2c(shape, strided, test_strided_out, axes, pocketfft::FORWARD, kernel.data(), kerf.data(), 1.f, 0);
-	//start_0 = std::chrono::steady_clock::now();
+	std::complex<float>* kerf_1D_row = new std::complex<float>[sizes[0] / 2 + 1];
+	std::complex<float>* kerf_1D_col = new std::complex<float>[sizes[1] / 2 + 1];
+	float* kernel_1D_row = new float[sizes[0]]();
+	make_kernel_1D(kernel_1D_row, nsmooth * nsmooth, shape_row[0]);
+	pocketfft::r2c(shape_row, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_row, kerf_1D_row, 1.f, 0);
+	delete[] kernel_1D_row;
+
+	if (sizes[0] != sizes[1]) {
+		float* kernel_1D_col = new float[sizes[1]]();
+		make_kernel_1D(kernel_1D_col, nsmooth * nsmooth, shape_col[0]);
+		pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_col, kerf_1D_col, 1.f, 0);
+		delete[] kernel_1D_col;
+	}
+	else
+		kerf_1D_col = kerf_1D_row;
 
 #pragma omp parallel for
 	for (int i = 0; i < 3; ++i) {
-		std::vector<std::complex<float>> resf(sizes[0] * (sizes[1] / 2 + 1));
-		pocketfft::r2c(shape, strided, test_strided_out, axes, pocketfft::FORWARD, (float*)temp[i].data, resf.data(), 1.f, 0);
+		std::complex<float>* resf = new std::complex<float>[sizes[0] * (sizes[1] / 2 + 1)];
+		pocketfft::r2c(shape, strided_in, strided_out, axes, pocketfft::FORWARD, (float*)temp[i].data, resf, 1.f, 0);
 
-		//multiply kernel float with result float using std::transform
-		transform(begin(kerf), end(kerf), begin(resf), begin(resf), std::multiplies<std::complex<float>>());
-
-		/*
-		for (int i = 0; i < sizes[0]; ++i)
+		for (int i = 0; i < sizes[0]; ++i) {
 			for (int j = 0; j < (sizes[1] / 2 + 1); ++j) {
-				resf[i * (sizes[1] / 2 + 1) + j] *= kerf[i * (sizes[1] / 2 + 1) + j];
-			}*/
+				resf[i * (sizes[1] / 2 + 1) + j] *=
+					/* pocketfft produce as length of the fft transformed last axes (size[0] / 2 + 1 ) but because "i" is going till "size[0]" there are missing values, in practice this value are just the reflection, so we read decreasing*/
+					((i < (sizes[0] / 2 + 1)) ? kerf_1D_row[i] : kerf_1D_row[(sizes[0] / 2) - i % (sizes[0] / 2)])
+					* kerf_1D_col[j];
+			}
+		}
 
-			//inverse the FFT
-		pocketfft::c2r(shape, test_strided_out, strided, axes, pocketfft::BACKWARD, resf.data(), (float*)temp[i].data, 1.f / ndata, 0);
+		//inverse the FFT
+		pocketfft::c2r(shape, strided_out, strided_in, axes, pocketfft::BACKWARD, resf, (float*)temp[i].data, 1.f / ndata, 0);
+		delete[] resf;
 
 		//just for debugging to print the FFT image
 		//transform(begin(resf), end(resf), &((float*)temp[i].data)[0], [](std::complex<float> i) { return std::real(i); });
@@ -156,6 +167,8 @@ void pocketfft_(cv::Mat image, int nsmooth)
 			for (int col = 0; col < (SIZE / 2 + 1); ++col)
 				((float*)temp[i].data)[row * SIZE + col] = std::real(resf[row * SIZE + col]);*/
 	}
+	delete[] kerf_1D_row;
+	delete[] kerf_1D_col;
 
 	printf("PocketFFT: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 	cv::merge(temp, 3, image);
@@ -393,7 +406,7 @@ void AddPadding(float(*block)[SIZE * 2], int nrows, int ncols, int nreflects)
 		int cval = (SIZE * 2 / 2 + 1) - ncols / 2;
 		nreflects = std::min(nreflects, std::min(rval, cval) - 2);
 		printf("%d %d %d %d %d\n", rval, cval, nrows, ncols, nreflects);
-		
+
 		for (int irow = rval - nreflects; irow < (rval + nrows + nreflects); irow++)
 		{
 			for (int c = cval - nreflects, c2 = cval + nreflects; c < cval; c++, c2--)
