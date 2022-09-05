@@ -1,0 +1,6 @@
+Colourgrams are given for the 'Lake' and 'Flower' Images.  These were derived by the original processing scheme. (No pre smoothing only denoise.)
+
+Note that the Palette image has been colour matched (Pitie method) to the Base image prior to computation of the colourgram.  Subsequently the resultant output is de-matched by applying the exact inverse of the transform that was applied for the matching process.  (Literally, apply matrix M to match apply matrix (inverse of M) after.) 
+
+
+Note that the examples are for difficult image pairs.  With an image pair such as 'Pisa tower' the colourgrams are very well behaved and the images look pretty good even with de-noise turned off.

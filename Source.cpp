@@ -68,7 +68,7 @@ uint32_t crc32c(uint8_t* data, size_t bytes)
 
 void make_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
 {
-	const double scale = 1. / pow(kLen, 4);
+	const double scale = 1. / pow(kLen, 4); 
 	for (int irow = -kLen + 1; irow <= (kLen - 1); irow++)
 	{
 		for (int icol = -kLen + 1; icol <= (kLen + 1); icol++) {
@@ -83,9 +83,7 @@ void make_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
 
 void make_kernel(float* kernel, int kLen, const size_t iFTsize[])
 {
-	const double scale = 1. / pow(kLen, 4);
-
-#pragma omp parallel for
+	const double scale = 1. / pow(kLen, 4); 
 	for (int irow = -kLen + 1; irow <= (kLen - 1); irow++)
 	{
 		for (int icol = -kLen + 1; icol <= (kLen - 1); icol++)
@@ -112,13 +110,13 @@ void pocketfft_(cv::Mat image, int nsmooth)
 
 	//if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
 	if (!pffft::Fft<float>::isValidSize(sizes[0] * sizes[1])) {
-		printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], sizes[0] * sizes[1], pffft::Fft<float>::isValidSize(sizes[0] * sizes[1]));
+		//printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], sizes[0] * sizes[1], pffft::Fft<float>::isValidSize(sizes[0] * sizes[1]));
 		pad[0] += (pffft::Fft<float>::nearestTransformSize(sizes[0]) - sizes[0]) / 2;
 		pad[1] += (pffft::Fft<float>::nearestTransformSize(sizes[1]) - sizes[1]) / 2;
 		sizes[0] = pffft::Fft<float>::nearestTransformSize(sizes[0]);
 		sizes[1] = pffft::Fft<float>::nearestTransformSize(sizes[1]);
 
-		printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], sizes[0] * sizes[1], pffft::Fft<float>::isValidSize(sizes[0] * sizes[1]));
+		//printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], sizes[0] * sizes[1], pffft::Fft<float>::isValidSize(sizes[0] * sizes[1]));
 
 	}
 	cv::copyMakeBorder(image, image, pad[0], pad[0], pad[1], pad[1], CV_HAL_BORDER_REFLECT);
@@ -165,6 +163,7 @@ void pocketfft_(cv::Mat image, int nsmooth)
 		std::complex<float>* resf = new std::complex<float>[sizes[0] * (sizes[1] / 2 + 1)];
 		pocketfft::r2c(shape, strided_in, strided_out, axes, pocketfft::FORWARD, (float*)temp[i].data, resf, 1.f, 0);
 
+		// mul image_FFT with kernel_1D_row and kernel_1D_col
 		for (int i = 0; i < sizes[0]; ++i) {
 			for (int j = 0; j < (sizes[1] / 2 + 1); ++j) {
 				resf[i * (sizes[1] / 2 + 1) + j] *=
@@ -176,14 +175,22 @@ void pocketfft_(cv::Mat image, int nsmooth)
 
 		//inverse the FFT
 		pocketfft::c2r(shape, strided_out, strided_in, axes, pocketfft::BACKWARD, resf, (float*)temp[i].data, 1.f / ndata, 0);
-		delete[] resf;
 
 		//just for debugging to print the FFT image
-		//transform(begin(resf), end(resf), &((float*)temp[i].data)[0], [](std::complex<float> i) { return std::real(i); });
 		/*
-		for (int row = 0; row < SIZE; ++row)
-			for (int col = 0; col < (SIZE / 2 + 1); ++col)
-				((float*)temp[i].data)[row * SIZE + col] = std::real(resf[row * SIZE + col]);*/
+		for (int row = 0; row < sizes[0]; ++row)
+			for (int col = 0; col < sizes[1]; ++col) {
+				//FFTSHIFT DC - odd/even treated as in matlab
+				int row_ = (row + (sizes[0] % 2 == 0 ? sizes[0] : (sizes[0] + 1)) / 2) % sizes[0];
+				int col_ = (col + (sizes[1] % 2 == 0 ? sizes[1] : (sizes[1] + 1)) / 2) % sizes[1];
+				//Reverse reading from end to the beginning after reached (sizes[1] / 2 + 1)
+				int cval = col_ < (sizes[1] / 2 + 1) ? col_ : ((sizes[1] / 2) - col_ % (sizes[1] / 2));
+				((float*)temp[i].data)[row * sizes[1] + col] = 
+					20 * log10(abs(
+						std::real(resf[row_ * (sizes[1] / 2 + 1) + cval])
+						+ 0.01));
+			}*/
+		delete[] resf;
 	}
 	if (sizes[0] != sizes[1])
 		delete[] kerf_1D_col;
@@ -208,13 +215,13 @@ void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 
 	//if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
 	if (!pffft::Fft<float>::isValidSize(ndata)) {
-		printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], ndata, pffft::Fft<float>::isValidSize(ndata));
+		//printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], ndata, pffft::Fft<float>::isValidSize(ndata));
 		pad[0] += (pffft::Fft<float>::nearestTransformSize(sizes[0]) - sizes[0]) / 2;
 		pad[1] += (pffft::Fft<float>::nearestTransformSize(sizes[1]) - sizes[1]) / 2;
 		sizes[0] = pffft::Fft<float>::nearestTransformSize(sizes[0]);
 		sizes[1] = pffft::Fft<float>::nearestTransformSize(sizes[1]);
 		ndata = sizes[0] * sizes[1];
-		printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], ndata, pffft::Fft<float>::isValidSize(ndata));
+		//printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], ndata, pffft::Fft<float>::isValidSize(ndata));
 
 	}
 	cv::copyMakeBorder(image, image, pad[0], pad[0], pad[1], pad[1], CV_HAL_BORDER_REFLECT);
@@ -563,7 +570,8 @@ inline void FFT(std::complex<float>* Fdata, int n, int sign)
 } /* end of FFT */
 
 int main(int argc, char* argv[]) {
-	cv::Mat noisy = cv::imread("C:/Users/Michele/Downloads/c.png");
+	char* file = argv[4];
+	cv::Mat noisy = cv::imread(file);
 	int flag = atoi(argv[1]); //3 pffft - 2 pocketfft - 1 TJ FFT - 0 OpenCV
 	int nsmooth = atoi(argv[2]);
 	bool fast = atoi(argv[3]); //fast convolve flaf for pffft ( skip reordering of z domain)
