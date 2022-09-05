@@ -128,7 +128,7 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	/* end of arguments settings */
 
 	std::vector<std::complex<float>> kerf(sizes[0] * (sizes[1] / 2 + 1));
-	
+
 	pocketfft::r2c(shape, strided, test_strided_out, axes, pocketfft::FORWARD, kernel.data(), kerf.data(), 1.f, 0);
 	//start_0 = std::chrono::steady_clock::now();
 
@@ -146,7 +146,7 @@ void pocketfft_(cv::Mat image, int nsmooth)
 				resf[i * (sizes[1] / 2 + 1) + j] *= kerf[i * (sizes[1] / 2 + 1) + j];
 			}*/
 
-		//inverse the FFT
+			//inverse the FFT
 		pocketfft::c2r(shape, test_strided_out, strided, axes, pocketfft::BACKWARD, resf.data(), (float*)temp[i].data, 1.f / ndata, 0);
 
 		//just for debugging to print the FFT image
@@ -353,7 +353,7 @@ void conv2(uint8_t(*target)[SIZE], float* kArray, int rt, int ct, int rk, int ck
 
 	// Bulk out by reflection at edges.
 	//
-	AddPadding(tArray, rt, ct, cv::max(rk, ck));
+	AddPadding(tArray, rt, ct, cv::max(rk / 2, ck / 2));
 
 	// Represent arrays as complex variables
 	for (int irow = 0; irow < d; irow++)
@@ -391,27 +391,24 @@ void AddPadding(float(*block)[SIZE * 2], int nrows, int ncols, int nreflects)
 	{
 		int rval = (SIZE * 2 / 2 + 1) - nrows / 2;
 		int cval = (SIZE * 2 / 2 + 1) - ncols / 2;
-
-
+		nreflects = std::min(nreflects, std::min(rval, cval) - 2);
+		printf("%d %d %d %d %d\n", rval, cval, nrows, ncols, nreflects);
+		
 		for (int irow = rval - nreflects; irow < (rval + nrows + nreflects); irow++)
 		{
-			int c2 = cval + nreflects;
-			for (int c = cval - nreflects; c < cval; c++)
+			for (int c = cval - nreflects, c2 = cval + nreflects; c < cval; c++, c2--)
 			{
 				block[irow][c] = block[irow][c2];
 				block[irow][c2 + ncols - 1] = block[irow][c + ncols - 1];
-				c2--;
 			}
 		}
 
 		for (int icol = cval - nreflects; icol < (cval + ncols + nreflects); icol++)
 		{
-			int r2 = rval + nreflects;
-			for (int r = rval - nreflects; r < rval; r++)
+			for (int r = rval - nreflects, r2 = rval + nreflects; r < rval; r++, r2--)
 			{
 				block[r][icol] = block[r2][icol];
 				block[r2 + nrows - 1][icol] = block[r + nrows - 1][icol];
-				r2--;
 			}
 		}
 	}
@@ -420,7 +417,7 @@ void AddPadding(float(*block)[SIZE * 2], int nrows, int ncols, int nreflects)
 void FFT2D(std::complex<float>(*array)[SIZE * 2], int nrows, int ncols, int sign)
 {
 	FFT((std::complex<float> *)array, SIZE * SIZE * 4, sign);
-	printf("FFT2D_par %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
+	printf("ex FFT2D %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 
 }
 
