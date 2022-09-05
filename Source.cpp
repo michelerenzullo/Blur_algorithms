@@ -68,19 +68,22 @@ uint32_t crc32c(uint8_t* data, size_t bytes)
 
 void make_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
 {
-	double scale = 1. / (kLen * kLen * kLen * kLen);
+	const double scale = 1. / pow(kLen, 4);
 	for (int irow = -kLen + 1; irow <= (kLen - 1); irow++)
 	{
-		for (int icol = -kLen + 1; icol <= (kLen - 1); icol++) {
-			int kval = (kLen - abs(irow)) * (kLen - abs(icol));
+		for (int icol = -kLen + 1; icol <= (kLen + 1); icol++) {
+			double kval = (kLen - abs(irow)) * (kLen - abs(icol));
 			kernel[(icol + iFTsize) % iFTsize] += std::clamp(kval * scale, 0., 1.);
 		}
 	}
+	double rank = 0.;
+	for (int i = 0; i < iFTsize; ++i) rank += kernel[i];
+	printf("rank %.3f - crc32: %02X\n", rank, crc32c((uint8_t*)kernel, iFTsize * sizeof(float)));
 }
 
 void make_kernel(float* kernel, int kLen, const size_t iFTsize[])
 {
-	const double scale = 1. / ((float)kLen * (float)kLen * (float)kLen * (float)kLen);
+	const double scale = 1. / pow(kLen, 4);
 
 #pragma omp parallel for
 	for (int irow = -kLen + 1; irow <= (kLen - 1); irow++)
@@ -102,10 +105,24 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	//pocketfft can handle non-small prime numbers decomposition of ndata but becomes slower, pffft cannot handle them and force you to add more pad
 
 	image.convertTo(image, CV_32FC3);
-	size_t pad = nsmooth * nsmooth - 1;
+	size_t pad[2] = { nsmooth * nsmooth - 1, nsmooth * nsmooth - 1 };
 	//pad = 0;
-	cv::copyMakeBorder(image, image, pad, pad, pad, pad, CV_HAL_BORDER_REFLECT);
-	const size_t sizes[2] = { image.size[0], image.size[1] };
+
+	size_t sizes[2] = { image.size[0] + pad[0] * 2, image.size[1] + pad[1] * 2 };
+
+	//if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
+	if (!pffft::Fft<float>::isValidSize(sizes[0] * sizes[1])) {
+		printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], sizes[0] * sizes[1], pffft::Fft<float>::isValidSize(sizes[0] * sizes[1]));
+		pad[0] += (pffft::Fft<float>::nearestTransformSize(sizes[0]) - sizes[0]) / 2;
+		pad[1] += (pffft::Fft<float>::nearestTransformSize(sizes[1]) - sizes[1]) / 2;
+		sizes[0] = pffft::Fft<float>::nearestTransformSize(sizes[0]);
+		sizes[1] = pffft::Fft<float>::nearestTransformSize(sizes[1]);
+
+		printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], sizes[0] * sizes[1], pffft::Fft<float>::isValidSize(sizes[0] * sizes[1]));
+
+	}
+	cv::copyMakeBorder(image, image, pad[0], pad[0], pad[1], pad[1], CV_HAL_BORDER_REFLECT);
+
 	cv::Mat temp[3];
 	cv::split(image, temp);
 
@@ -127,13 +144,14 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	pocketfft::shape_t shape_col{ sizes[1] };
 
 	std::complex<float>* kerf_1D_row = new std::complex<float>[sizes[0] / 2 + 1];
-	std::complex<float>* kerf_1D_col = new std::complex<float>[sizes[1] / 2 + 1];
+	std::complex<float>* kerf_1D_col;
 	float* kernel_1D_row = new float[sizes[0]]();
 	make_kernel_1D(kernel_1D_row, nsmooth * nsmooth, shape_row[0]);
 	pocketfft::r2c(shape_row, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_row, kerf_1D_row, 1.f, 0);
 	delete[] kernel_1D_row;
 
 	if (sizes[0] != sizes[1]) {
+		kerf_1D_col = new std::complex<float>[sizes[1] / 2 + 1];
 		float* kernel_1D_col = new float[sizes[1]]();
 		make_kernel_1D(kernel_1D_col, nsmooth * nsmooth, shape_col[0]);
 		pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_col, kerf_1D_col, 1.f, 0);
@@ -167,14 +185,15 @@ void pocketfft_(cv::Mat image, int nsmooth)
 			for (int col = 0; col < (SIZE / 2 + 1); ++col)
 				((float*)temp[i].data)[row * SIZE + col] = std::real(resf[row * SIZE + col]);*/
 	}
+	if (sizes[0] != sizes[1])
+		delete[] kerf_1D_col;
 	delete[] kerf_1D_row;
-	delete[] kerf_1D_col;
 
 	printf("PocketFFT: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 	cv::merge(temp, 3, image);
 
 	image.convertTo(image, CV_8UC3);
-	cv::Rect myroi(pad, pad, sizes[1] - pad * 2, sizes[0] - pad * 2);
+	cv::Rect myroi(pad[1], pad[0], sizes[1] - pad[1] * 2, sizes[0] - pad[0] * 2);
 	cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
 
 }
