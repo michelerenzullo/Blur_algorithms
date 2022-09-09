@@ -189,6 +189,31 @@ void flip_block(const T * in, T * out, const int w, const int h, const int c)
 }
 
 //!
+//! \brief this function converts the standard deviation of 
+//! Gaussian blur into a box radius for each box blur pass. For 
+//! further details please refer to :
+//! https://www.peterkovesi.com/papers/FastGaussianSmoothing.pdf
+//!
+//! \param[out] boxes   box radiis for kernel sizes of 2*boxes[i]+1
+//! \param[in] sigma    Gaussian standard deviation
+//! \param[in] n        number of box blur pass
+//!
+void sigma_to_box_radius(int boxes[], const float sigma, const int n)  
+{
+    // ideal filter width
+    float wi = std::sqrt((12*sigma*sigma/n)+1); 
+    int wl = wi; // no need std::floor  
+    if(wl%2==0) wl--;
+    int wu = wl+2;
+                
+    float mi = (12*sigma*sigma - n*wl*wl - 4*n*wl - 3*n)/(-4*wl - 4);
+    int m = mi+0.5f; // avoid std::round by adding 0.5f and cast to integer type
+                
+    for(int i=0; i<n; i++) 
+        boxes[i] = ((i < m ? wl : wu) - 1) / 2;
+}
+
+//!
 //! \brief This function performs a fast Gaussian blur. Applying several
 //! times box blur tends towards a true Gaussian blur. Three passes are sufficient
 //! for good results. Templated by buffer data type T. The input buffer is also used
@@ -214,8 +239,34 @@ void flip_block(const T * in, T * out, const int w, const int h, const int c)
 //! \param[in] c            image channels
 //! \param[in] sigma        Gaussian standard deviation
 //!
-//! 
-//! 
+template<typename T>
+void fast_gaussian_blur_3(T *& in, T *& out, const int w, const int h, const int c, const float sigma) 
+{
+    // compute box kernel sizes
+    int n = 3;
+    int boxes[3];
+    sigma_to_box_radius(boxes, sigma, n);
+
+    // perform 3 horizontal blur passes
+    horizontal_blur(in, out, w, h, c, boxes[0]);
+    horizontal_blur(out, in, w, h, c, boxes[1]);
+    horizontal_blur(in, out, w, h, c, boxes[2]);
+    
+    // flip buffer
+    flip_block(out, in, w, h, c);
+    
+    // perform 3 horizontal blur passes
+    horizontal_blur(in, out, h, w, c, boxes[0]);
+    horizontal_blur(out, in, h, w, c, boxes[1]);
+    horizontal_blur(in, out, h, w, c, boxes[2]);
+    
+    // flip buffer
+    flip_block(out, in, h, w, c);
+    
+    // swap pointers to get result in the ouput buffer 
+    std::swap(in, out);    
+}
+
 template<typename T>
 void fast_gaussian_blur_N(T *& in, T *& out, const int w, const int h, const int c, const float sigma, const int n) 
 {

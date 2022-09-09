@@ -68,7 +68,7 @@ uint32_t crc32c(uint8_t* data, size_t bytes)
 
 void make_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
 {
-	const double scale = 1. / pow(kLen, 4); 
+	const double scale = 1. / pow(kLen, 4);
 	for (int irow = -kLen + 1; irow <= (kLen - 1); irow++)
 	{
 		for (int icol = -kLen + 1; icol <= (kLen + 1); icol++) {
@@ -81,9 +81,27 @@ void make_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
 	printf("rank %.3f - crc32: %02X\n", rank, crc32c((uint8_t*)kernel, iFTsize * sizeof(float)));
 }
 
+int isValidSize(int N) {
+	const int N_min = 32;
+	int R = N;
+	while (R >= 5 * N_min && (R % 5) == 0)  R /= 5;
+	while (R >= 3 * N_min && (R % 3) == 0)  R /= 3;
+	while (R >= 2 * N_min && (R % 2) == 0)  R /= 2;
+	return (R == N_min) ? 1 : 0;
+}
+
+int nearestTransformSize(int N) {
+	const int N_min = 32;
+	if (N < N_min) N = N_min;
+	N = N_min * ((N + N_min - 1) / N_min);
+
+	while (!isValidSize(N)) N += N_min;
+	return N;
+}
+
 void make_kernel(float* kernel, int kLen, const size_t iFTsize[])
 {
-	const double scale = 1. / pow(kLen, 4); 
+	const double scale = 1. / pow(kLen, 4);
 	for (int irow = -kLen + 1; irow <= (kLen - 1); irow++)
 	{
 		for (int icol = -kLen + 1; icol <= (kLen - 1); icol++)
@@ -97,34 +115,67 @@ void make_kernel(float* kernel, int kLen, const size_t iFTsize[])
 	printf("crc32: %02X\n", crc32c((uint8_t*)kernel, iFTsize[0] * iFTsize[1] * sizeof(float)));
 }
 
+template<typename T, int C> void flip_block(const T* in, T* out, const int w, const int h)
+{
+	constexpr int block = 256 / C;
+#pragma omp parallel for collapse(2)
+	for (int x = 0; x < w; x += block)
+		for (int y = 0; y < h; y += block)
+		{
+			const T* p = in + y * w * C + x * C;
+			T* q = out + y * C + x * h * C;
+
+			const int blockx = std::min(w, x + block) - x;
+			const int blocky = std::min(h, y + block) - y;
+			for (int xx = 0; xx < blockx; xx++)
+			{
+				for (int yy = 0; yy < blocky; yy++)
+				{
+					for (int k = 0; k < C; k++)
+						q[k] = p[k];
+					p += w * C;
+					q += C;
+				}
+				p += -blocky * w * C + C;
+				q += -blocky * C + h * C;
+			}
+		}
+}
 
 void pocketfft_(cv::Mat image, int nsmooth)
 {
 	//pocketfft can handle non-small prime numbers decomposition of ndata but becomes slower, pffft cannot handle them and force you to add more pad
 
 	image.convertTo(image, CV_32FC3);
-	size_t pad[2] = { nsmooth * nsmooth - 1, nsmooth * nsmooth - 1 };
+	//top - bottom - left - right margin
+	int pad[4] = { nsmooth * nsmooth - 1, nsmooth * nsmooth - 1, nsmooth * nsmooth - 1, nsmooth * nsmooth - 1 };
 	//pad = 0;
 
-	size_t sizes[2] = { image.size[0] + pad[0] * 2, image.size[1] + pad[1] * 2 };
+	//absolute min padd
+	size_t sizes[2] = { image.size[0] + pad[0] + pad[1], image.size[1] + pad[2] + pad[3] };
 
 	//if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
-	if (!pffft::Fft<float>::isValidSize(sizes[0] * sizes[1])) {
-		//printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], sizes[0] * sizes[1], pffft::Fft<float>::isValidSize(sizes[0] * sizes[1]));
-		pad[0] += (pffft::Fft<float>::nearestTransformSize(sizes[0]) - sizes[0]) / 2;
-		pad[1] += (pffft::Fft<float>::nearestTransformSize(sizes[1]) - sizes[1]) / 2;
-		sizes[0] = pffft::Fft<float>::nearestTransformSize(sizes[0]);
-		sizes[1] = pffft::Fft<float>::nearestTransformSize(sizes[1]);
+	for (int i = 0; i < 2; ++i) {
+		if (!isValidSize(sizes[i]))
+		{
+			//printf("pre %d %d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], pad[2], pad[3], pffft::Fft<float>::isValidSize(sizes[i]));
+			int new_size = nearestTransformSize(sizes[i]);
+			int new_pad = (new_size - sizes[i]);
+			sizes[i] = new_size;
+			pad[i * 2 + 0] += new_pad / 2; //floor - fix for new_pad when not even
+			pad[i * 2 + 1] += new_pad / 2.f + 0.5f; //ceil if odd - fix for new_pad when not even
 
-		//printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], sizes[0] * sizes[1], pffft::Fft<float>::isValidSize(sizes[0] * sizes[1]));
-
+			//printf("post %d %d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], pad[2], pad[3], pffft::Fft<float>::isValidSize(sizes[i]));
+		}
 	}
-	cv::copyMakeBorder(image, image, pad[0], pad[0], pad[1], pad[1], CV_HAL_BORDER_REFLECT);
+
+	//printf("is valid 0 * 1 : %d\n", pffft::Fft<float>::isValidSize(sizes[0] * sizes[1]));
+
+	cv::copyMakeBorder(image, image, pad[0], pad[1], pad[2], pad[3], CV_HAL_BORDER_REFLECT);
+	//printf("%d %d\n", image.size[0], image.size[1]);
 
 	cv::Mat temp[3];
 	cv::split(image, temp);
-
-	int ndata = sizes[0] * sizes[1];
 
 	start_0 = std::chrono::steady_clock::now();
 
@@ -141,13 +192,19 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	pocketfft::shape_t shape_row{ sizes[0] };
 	pocketfft::shape_t shape_col{ sizes[1] };
 
-	std::complex<float>* kerf_1D_row = new std::complex<float>[sizes[0] / 2 + 1];
+	//std::complex<float>* kerf_1D_row = new std::complex<float>[sizes[0] / 2 + 1];
+	std::vector<std::complex<float>> kerf_1D_row(sizes[0] / 2 + 1);
 	std::complex<float>* kerf_1D_col;
 	float* kernel_1D_row = new float[sizes[0]]();
 	make_kernel_1D(kernel_1D_row, nsmooth * nsmooth, shape_row[0]);
-	pocketfft::r2c(shape_row, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_row, kerf_1D_row, 1.f, 0);
+	pocketfft::r2c(shape_row, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_row, kerf_1D_row.data(), 1.f, 0);
 	delete[] kernel_1D_row;
 
+	//since row will be iterated for a length of sizes[0] but its length ends at (sizes[0]/2 + 1), we resize and reflect, with index kerf_1D_row[sizes[0] / 2 + 1] as pivot
+	kerf_1D_row.resize(sizes[0]);
+	std::copy_n(kerf_1D_row.rbegin() + (sizes[0] / 2.f + .5f), kerf_1D_row.size() - (sizes[0] / 2 + 1), kerf_1D_row.begin() + (sizes[0] / 2 + 1));
+
+	//calculate again the kernel and his DFT if the length of cols is not the same of rows
 	if (sizes[0] != sizes[1]) {
 		kerf_1D_col = new std::complex<float>[sizes[1] / 2 + 1];
 		float* kernel_1D_col = new float[sizes[1]]();
@@ -156,7 +213,9 @@ void pocketfft_(cv::Mat image, int nsmooth)
 		delete[] kernel_1D_col;
 	}
 	else
-		kerf_1D_col = kerf_1D_row;
+		kerf_1D_col = kerf_1D_row.data();
+
+	int ndata = sizes[0] * sizes[1];
 
 #pragma omp parallel for
 	for (int i = 0; i < 3; ++i) {
@@ -164,12 +223,10 @@ void pocketfft_(cv::Mat image, int nsmooth)
 		pocketfft::r2c(shape, strided_in, strided_out, axes, pocketfft::FORWARD, (float*)temp[i].data, resf, 1.f, 0);
 
 		// mul image_FFT with kernel_1D_row and kernel_1D_col
+#pragma omp simd
 		for (int i = 0; i < sizes[0]; ++i) {
 			for (int j = 0; j < (sizes[1] / 2 + 1); ++j) {
-				resf[i * (sizes[1] / 2 + 1) + j] *=
-					/* pocketfft produce as length of the fft transformed last axes (size[0] / 2 + 1 ) but because "i" is going till "size[0]" there are missing values, in practice this value are just the reflection, so we read decreasing*/
-					((i < (sizes[0] / 2 + 1)) ? kerf_1D_row[i] : kerf_1D_row[(sizes[0] / 2) - i % (sizes[0] / 2)])
-					* kerf_1D_col[j];
+				resf[i * (sizes[1] / 2 + 1) + j] *= kerf_1D_row[i] * kerf_1D_col[j];
 			}
 		}
 
@@ -185,7 +242,7 @@ void pocketfft_(cv::Mat image, int nsmooth)
 				int col_ = (col + (sizes[1] % 2 == 0 ? sizes[1] : (sizes[1] + 1)) / 2) % sizes[1];
 				//Reverse reading from end to the beginning after reached (sizes[1] / 2 + 1)
 				int cval = col_ < (sizes[1] / 2 + 1) ? col_ : ((sizes[1] / 2) - col_ % (sizes[1] / 2));
-				((float*)temp[i].data)[row * sizes[1] + col] = 
+				((float*)temp[i].data)[row * sizes[1] + col] =
 					20 * log10(abs(
 						std::real(resf[row_ * (sizes[1] / 2 + 1) + cval])
 						+ 0.01));
@@ -194,48 +251,53 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	}
 	if (sizes[0] != sizes[1])
 		delete[] kerf_1D_col;
-	delete[] kerf_1D_row;
+	//delete[] kerf_1D_row;
 
 	printf("PocketFFT: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 	cv::merge(temp, 3, image);
 
 	image.convertTo(image, CV_8UC3);
-	cv::Rect myroi(pad[1], pad[0], sizes[1] - pad[1] * 2, sizes[0] - pad[0] * 2);
+	cv::Rect myroi(pad[2], pad[0], sizes[1] - pad[2] - pad[3], sizes[0] - pad[0] - pad[1]);
 	cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
 
 }
+
 
 void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 {
 
 	image.convertTo(image, CV_32FC3);
-	size_t pad[2] = { nsmooth * nsmooth - 1 , nsmooth * nsmooth - 1 }; //minimal required pad to fix the circular convolution
-	size_t sizes[2] = { image.size[0] + pad[0] * 2, image.size[1] + pad[1] * 2 };
-	size_t ndata = sizes[0] * sizes[1];
+	//top - bottom - left - right margin
+	int pad[4] = { nsmooth * nsmooth - 1, nsmooth * nsmooth - 1, nsmooth * nsmooth - 1, nsmooth * nsmooth - 1 };
+	//pad = 0;
+
+	//absolute min padd
+	size_t sizes[2] = { image.size[0] + pad[0] + pad[1], image.size[1] + pad[2] + pad[3] };
 
 	//if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
-	if (!pffft::Fft<float>::isValidSize(ndata)) {
-		//printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], ndata, pffft::Fft<float>::isValidSize(ndata));
-		pad[0] += (pffft::Fft<float>::nearestTransformSize(sizes[0]) - sizes[0]) / 2;
-		pad[1] += (pffft::Fft<float>::nearestTransformSize(sizes[1]) - sizes[1]) / 2;
-		sizes[0] = pffft::Fft<float>::nearestTransformSize(sizes[0]);
-		sizes[1] = pffft::Fft<float>::nearestTransformSize(sizes[1]);
-		ndata = sizes[0] * sizes[1];
-		//printf("%d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], ndata, pffft::Fft<float>::isValidSize(ndata));
-
+	for (int i = 0; i < 2; ++i) {
+		if (!pffft::Fft<float>::isValidSize(sizes[i]))
+		{
+			//printf("pre %d %d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], pad[2], pad[3], pffft::Fft<float>::isValidSize(sizes[i]));
+			int new_size = pffft::Fft<float>::nearestTransformSize(sizes[i]);
+			int new_pad = (new_size - sizes[i]);
+			sizes[i] = new_size;
+			pad[i * 2 + 0] += new_pad / 2; //floor - fix for new_pad when not even
+			pad[i * 2 + 1] += new_pad / 2.f + 0.5f; //ceil if odd - fix for new_pad when not even
+			//printf("post %d %d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], pad[2], pad[3], pffft::Fft<float>::isValidSize(sizes[i]));
+		}
 	}
-	cv::copyMakeBorder(image, image, pad[0], pad[0], pad[1], pad[1], CV_HAL_BORDER_REFLECT);
-
-	pffft::Fft<float> fft_kernel(ndata);
-	pffft::AlignedVector<float> kernel_aligned = pffft::AlignedVector<float>(fft_kernel.getLength());
-
-	make_kernel(kernel_aligned.data(), nsmooth * nsmooth, sizes);
+	cv::copyMakeBorder(image, image, pad[0], pad[1], pad[2], pad[3], CV_HAL_BORDER_REFLECT);
 
 	cv::Mat temp[3];
 	cv::split(image, temp);
 
 	start_0 = std::chrono::steady_clock::now();
 
+	pffft::Fft<float> fft_kernel(sizes[0] * sizes[1]);
+	pffft::AlignedVector<float> kernel_aligned = pffft::AlignedVector<float>(fft_kernel.getLength());
+
+	make_kernel(kernel_aligned.data(), nsmooth * nsmooth, sizes);
 	bool fast_convolve = fast;
 
 	pffft::AlignedVector<float> kerf;
@@ -249,13 +311,12 @@ void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 		fft_kernel.forward(kernel_aligned, kerf_complex);
 	}
 	kernel_aligned.clear();
-
+	int ndata = sizes[0] * sizes[1];
 	std::vector<pffft::AlignedVector<float>> resf(3, pffft::AlignedVector<float>(ndata) /* same as fft_kernel.valueVector() */);
 
 #pragma omp parallel for
 	for (int i = 0; i < 3; ++i) {
 		pffft::Fft<float> fft(ndata);
-		//std::cout << fft.getLength() << " " << fft.getSpectrumSize() << " " << fft.getInternalLayoutSize() << "\n";
 		std::copy(&((float*)temp[i].data)[0], &((float*)temp[i].data)[ndata], resf[i].begin());
 		temp[i].release();
 		//if fast_convolve no z-domain reordering, so it's faster than the normal process, is written in their APIs
@@ -274,8 +335,14 @@ void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 			work.clear();
 		}
 		temp[i] = cv::Mat(sizes[0], sizes[1], CV_32F, resf[i].data());
+		//printf("\n");
 	}
-	fast_convolve ? kerf.clear() : kerf_complex.clear();
+	if (fast_convolve) {
+		kerf.clear();
+	}
+	else {
+		kerf_complex.clear();
+	}
 
 
 	printf("pffft: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
@@ -283,7 +350,7 @@ void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 
 	//cv::cvtColor(image, image, cv::COLOR_YCrCb2BGR);
 	image.convertTo(image, CV_8UC3);
-	cv::Rect myroi(pad[1], pad[0], sizes[1] - pad[1] * 2, sizes[0] - pad[0] * 2);
+	cv::Rect myroi(pad[2], pad[0], sizes[1] - pad[2] - pad[3], sizes[0] - pad[0] - pad[1]);
 	cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
 }
 
