@@ -8,6 +8,7 @@
 #include <iostream> 
 #include <pffft.hpp>
 #include "pocketfft_hdronly.h"
+#include "fast_gaussian_blur_template.h"
 #define _CRTDBG_MAP_ALLOC
 #include <cstdlib>
 #include <crtdbg.h>
@@ -29,6 +30,7 @@ void conv2(uint8_t(*target)[SIZE], float* kernel, int rt, int ct, int rk, int ck
 void convolution(std::complex<float>(*target)[SIZE * 2], std::complex<float>(*kernel)[SIZE * 2]);
 void FFT2D(std::complex<float>(*array)[SIZE * 2], int nrows, int ncols, int sign);
 inline void FFT(std::complex<float>* Fdata, int n, int sign);
+
 
 void generate_table(uint32_t* crc_table)
 {
@@ -114,7 +116,7 @@ void make_kernel(float* kernel, int kLen, const size_t iFTsize[])
 	}
 	printf("crc32: %02X\n", crc32c((uint8_t*)kernel, iFTsize[0] * iFTsize[1] * sizeof(float)));
 }
-
+/*
 template<typename T, int C> void flip_block(const T* in, T* out, const int w, const int h)
 {
 	constexpr int block = 256 / C;
@@ -141,7 +143,7 @@ template<typename T, int C> void flip_block(const T* in, T* out, const int w, co
 			}
 		}
 }
-
+*/
 void pocketfft_(cv::Mat image, int nsmooth)
 {
 	//pocketfft can handle non-small prime numbers decomposition of ndata but becomes slower, pffft cannot handle them and force you to add more pad
@@ -201,6 +203,7 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	delete[] kernel_1D_row;
 
 	//since row will be iterated for a length of sizes[0] but its length ends at (sizes[0]/2 + 1), we resize and reflect, with index kerf_1D_row[sizes[0] / 2 + 1] as pivot
+	//"In case of real (single-channel) data, the output spectrum of the forward Fourier transform or input spectrum of the inverse Fourier transform can be represented in a packed format called CCS (complex-conjugate-symmetrical)" from - OpenCV Documentation
 	kerf_1D_row.resize(sizes[0]);
 	std::copy_n(kerf_1D_row.rbegin() + (sizes[0] / 2.f + .5f), kerf_1D_row.size() - (sizes[0] / 2 + 1), kerf_1D_row.begin() + (sizes[0] / 2 + 1));
 
@@ -222,8 +225,7 @@ void pocketfft_(cv::Mat image, int nsmooth)
 		std::complex<float>* resf = new std::complex<float>[sizes[0] * (sizes[1] / 2 + 1)];
 		pocketfft::r2c(shape, strided_in, strided_out, axes, pocketfft::FORWARD, (float*)temp[i].data, resf, 1.f, 0);
 
-		// mul image_FFT with kernel_1D_row and kernel_1D_col
-#pragma omp simd
+		// mul image_FFT with kernel_1D_row and kernel_1D_col 
 		for (int i = 0; i < sizes[0]; ++i) {
 			for (int j = 0; j < (sizes[1] / 2 + 1); ++j) {
 				resf[i * (sizes[1] / 2 + 1) + j] *= kerf_1D_row[i] * kerf_1D_col[j];
@@ -294,56 +296,95 @@ void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 
 	start_0 = std::chrono::steady_clock::now();
 
-	pffft::Fft<float> fft_kernel(sizes[0] * sizes[1]);
-	pffft::AlignedVector<float> kernel_aligned = pffft::AlignedVector<float>(fft_kernel.getLength());
 
-	make_kernel(kernel_aligned.data(), nsmooth * nsmooth, sizes);
-	bool fast_convolve = fast;
-
-	pffft::AlignedVector<float> kerf;
+	pffft::AlignedVector<float> kerf_1D_row;
+	pffft::AlignedVector<float> kerf_1D_col;
 	pffft::AlignedVector<std::complex<float>> kerf_complex;
-	if (fast_convolve) {
-		kerf = fft_kernel.internalLayoutVector();
-		fft_kernel.forwardToInternalLayout(kernel_aligned, kerf);
+	if (fast) {
+		pffft::Fft<float> fft_kernel_1D_row(sizes[0]);
+		pffft::AlignedVector<float> kernel_aligned_1D_row = pffft::AlignedVector<float>(fft_kernel_1D_row.getLength());
+
+		make_kernel_1D(kernel_aligned_1D_row.data(), nsmooth * nsmooth, sizes[0]);
+
+		kerf_1D_row = fft_kernel_1D_row.internalLayoutVector();
+		fft_kernel_1D_row.forwardToInternalLayout(kernel_aligned_1D_row, kerf_1D_row);
+
+		if (sizes[0] != sizes[1]) {
+			pffft::Fft<float> fft_kernel_1D_col(sizes[1]);
+			pffft::AlignedVector<float> kernel_aligned_1D_col = pffft::AlignedVector<float>(fft_kernel_1D_col.getLength());
+
+			make_kernel_1D(kernel_aligned_1D_col.data(), nsmooth * nsmooth, sizes[1]);
+
+			kerf_1D_col = fft_kernel_1D_col.internalLayoutVector();
+			fft_kernel_1D_col.forwardToInternalLayout(kernel_aligned_1D_col, kerf_1D_col);
+
+		}
+		else {
+			kerf_1D_col = kerf_1D_row;
+		}
+
 	}
 	else {
+		pffft::Fft<float> fft_kernel(sizes[0] * sizes[1]);
+		pffft::AlignedVector<float> kernel_aligned = pffft::AlignedVector<float>(fft_kernel.getLength());
+		make_kernel(kernel_aligned.data(), nsmooth * nsmooth, sizes);
 		kerf_complex = fft_kernel.spectrumVector();
 		fft_kernel.forward(kernel_aligned, kerf_complex);
 	}
-	kernel_aligned.clear();
+
 	int ndata = sizes[0] * sizes[1];
 	std::vector<pffft::AlignedVector<float>> resf(3, pffft::AlignedVector<float>(ndata) /* same as fft_kernel.valueVector() */);
 
 #pragma omp parallel for
 	for (int i = 0; i < 3; ++i) {
-		pffft::Fft<float> fft(ndata);
-		std::copy(&((float*)temp[i].data)[0], &((float*)temp[i].data)[ndata], resf[i].begin());
-		temp[i].release();
 		//if fast_convolve no z-domain reordering, so it's faster than the normal process, is written in their APIs
-		if (fast_convolve) {
-			pffft::AlignedVector<float> work = fft.internalLayoutVector();
-			fft.forwardToInternalLayout(resf[i], work);
-			fft.convolve(work, kerf, work, 1.f / ndata);
-			fft.inverseFromInternalLayout(work, resf[i]);
-			work.clear();
+		if (fast) {
+			pffft::Fft<float> fft_rows(sizes[1]);
+			for (int j = 0; j < sizes[0]; ++j) {
+
+				pffft::AlignedVector<float> resf_(sizes[1]);
+				std::copy_n(&((float*)temp[i].data)[j * sizes[1]], sizes[1], resf_.begin());
+
+				pffft::AlignedVector<float> work = fft_rows.internalLayoutVector();
+				fft_rows.forwardToInternalLayout(resf_, work);
+				fft_rows.convolve(work, kerf_1D_col, work, 1.f / sizes[1]);
+				fft_rows.inverseFromInternalLayout(work, resf_);
+				//std::transform(resf_.begin(), resf_.end(), resf_.begin(), [&sizes](auto i) {return i * (1.f / sizes[1]); });
+
+				std::copy(resf_.begin(), resf_.end(), resf[i].begin() + j * sizes[1]);
+			}
+
+			flip_block<float, 1>((float*)resf[i].data(), ((float*)temp[i].data), (int)sizes[1], (int)sizes[0]);
+
+			pffft::Fft<float> fft_cols(sizes[0]);
+			for (int j = 0; j < sizes[1]; ++j) {
+
+				pffft::AlignedVector<float> resf_(sizes[0]);
+				std::copy_n(&((float*)temp[i].data)[j * sizes[0]], sizes[0], resf_.begin());
+
+				pffft::AlignedVector<float> work = fft_cols.internalLayoutVector();
+				fft_cols.forwardToInternalLayout(resf_, work);
+				fft_cols.convolve(work, kerf_1D_row, work, 1.f / sizes[0]);
+				fft_cols.inverseFromInternalLayout(work, resf_);
+				//std::transform(resf_.begin(), resf_.end(), resf_.begin(), [&sizes](auto i) {return i * (1.f / sizes[0]); });
+
+				std::copy(resf_.begin(), resf_.end(), resf[i].begin() + j * sizes[0]);
+
+			}
+			flip_block<float, 1>((float*)resf[i].data(), ((float*)temp[i].data), (int)sizes[0], (int)sizes[1]);
 		}
 		else {
+			std::copy_n(&((float*)temp[i].data)[0], ndata, resf[i].begin());
+			pffft::Fft<float> fft(ndata);
 			pffft::AlignedVector<std::complex<float>> work = fft.spectrumVector();
 			fft.forward(resf[i], work);
 			transform(begin(kerf_complex), end(kerf_complex), begin(work), begin(work), [&ndata](auto& n, auto& m) { return n * m * (1.f / ndata); });
 			fft.inverse(work, resf[i]);
 			work.clear();
+			temp[i] = cv::Mat(sizes[0], sizes[1], CV_32F, resf[i].data());
 		}
-		temp[i] = cv::Mat(sizes[0], sizes[1], CV_32F, resf[i].data());
-		//printf("\n");
-	}
-	if (fast_convolve) {
-		kerf.clear();
-	}
-	else {
-		kerf_complex.clear();
-	}
 
+	}
 
 	printf("pffft: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 	cv::merge(temp, 3, image);
@@ -409,6 +450,44 @@ void Test(cv::Mat image, int flag = 0, int nsmooth = 5, bool fast_ = 1)
 	start_0 = std::chrono::steady_clock::now();
 
 	if (flag == 3) pffft_(image, nsmooth, fast_);
+	else if (flag == 4) {
+
+		int pad[2] = { (nsmooth * nsmooth - 1), (nsmooth * nsmooth - 1) };
+		size_t sizes[2] = { image.size[0] + pad[0] * 2, image.size[1] + pad[1] * 2 };
+		cv::copyMakeBorder(image, image, pad[0], pad[0], pad[1], pad[1], CV_HAL_BORDER_REFLECT);
+
+		std::vector<uchar> image_out(sizes[1] * sizes[0] * 3);
+		uchar* image_out_ptr = image_out.data();
+
+		int passes = 2;
+		for (int i = 0; i < passes; ++i) {
+			horizontal_blur_extend<uchar, 3>(image.data, image_out_ptr, sizes[1], sizes[0], nsmooth * nsmooth);
+			std::swap(image.data, image_out_ptr);
+		}
+
+		std::chrono::time_point<std::chrono::steady_clock> start_1 = std::chrono::steady_clock::now();
+		flip_block(image.data, image_out_ptr, image.size[1], image.size[0], 3);
+		std::chrono::time_point<std::chrono::steady_clock> start_2 = std::chrono::steady_clock::now();
+
+		for (int i = 0; i < passes; ++i) {
+			horizontal_blur_extend<uchar, 3>(image_out_ptr, image.data, sizes[0], sizes[1], nsmooth * nsmooth);
+			std::swap(image.data, image_out_ptr);
+		}
+
+		std::chrono::time_point<std::chrono::steady_clock> start_3 = std::chrono::steady_clock::now();
+		flip_block(image_out_ptr, image.data, image.size[0], image.size[1], 3);
+		std::chrono::time_point<std::chrono::steady_clock> start_4 = std::chrono::steady_clock::now();
+
+		printf("fastblur tot: %f\n", std::chrono::duration<double, std::milli>(start_4 - start_0).count());
+		printf("1st transp : %f\n", std::chrono::duration<double, std::milli>(start_2 - start_1).count());
+		printf("2nd transp : %f\n", std::chrono::duration<double, std::milli>(start_4 - start_3).count());
+		printf("(tot - transp) : %f\n", std::chrono::duration<double, std::milli>(start_4 - start_0).count() - std::chrono::duration<double, std::milli>(start_2 - start_1).count() - std::chrono::duration<double, std::milli>(start_4 - start_3).count());
+
+
+		cv::Rect myroi(pad[1], pad[0], sizes[1] - pad[1] * 2, sizes[0] - pad[0] * 2);
+		cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
+
+	}
 	else if (flag == 2) pocketfft_(image, nsmooth);
 	else if (flag == 1)
 	{
@@ -424,22 +503,15 @@ void Test(cv::Mat image, int flag = 0, int nsmooth = 5, bool fast_ = 1)
 	}
 	else
 	{
-		cv::Mat temp[3];
-		//cv::cvtColor(image, image, cv::COLOR_BGR2YCrCb);
-		cv::split(image, temp);
+
 		nsmooth *= nsmooth;
-		Concurrency::parallel_for(0, 3, [&temp, &nsmooth](int i) {
-			cv::blur(temp[i], temp[i], cv::Size(nsmooth, nsmooth));
-			cv::blur(temp[i], temp[i], cv::Size(nsmooth, nsmooth));
-			});
+
+		cv::blur(image, image, cv::Size(nsmooth, nsmooth));
+		cv::blur(image, image, cv::Size(nsmooth, nsmooth));
 		printf("OpenCV blur: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 
-		cv::merge(temp, 3, image);
-		//cv::cvtColor(image, image, cv::COLOR_YCrCb2BGR);
 		cv::imwrite("C:/Users/Michele/Downloads/c_.png", image);
 	}
-
-
 }
 
 void conv2(uint8_t(*target)[SIZE], float* kArray, int rt, int ct, int rk, int ck)

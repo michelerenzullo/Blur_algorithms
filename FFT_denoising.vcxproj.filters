@@ -27,9 +27,6 @@
     <ClCompile Include="Source.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="BoxBlur.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Recolour.h">
@@ -39,6 +36,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="pocketfft_hdronly.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="fast_gaussian_blur_template.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
