@@ -33,6 +33,39 @@ void convolution(std::complex<float>(*target)[SIZE * 2], std::complex<float>(*ke
 void FFT2D(std::complex<float>(*array)[SIZE * 2], int nrows, int ncols, int sign);
 inline void FFT(std::complex<float>* Fdata, int n, int sign);
 
+#define M_PI		3.14159265358979323846
+
+void getGaussian(std::vector<double>& kernel, int& height, int& width, const double sigma = 1.)
+{
+	float epsilon = 0.01f;
+	if (height == 0) {
+		float x = (sqrt(-2 * pow(sigma, 2) * log(epsilon * sigma * sqrt(2 * M_PI))));
+		float radius = ceil(x);
+		int ksize = (1 + 2 * radius);
+		height = ksize;
+		printf("x %f - radius %f - width %d\n", x, radius, ksize);
+	}
+	if (width == 0) {
+		float x = (sqrt(-2 * pow(sigma, 2) * log(epsilon * sigma * sqrt(2 * M_PI))));
+		float radius = ceil(x);
+		int ksize = (1 + 2 * radius);
+		width = ksize;
+		printf("x %f - radius %f - width %d\n", x, radius, ksize);
+	}
+	kernel.resize(height * width);
+	float mid_h = (height - 1) / 2.f;
+	float mid_w = (width - 1) / 2.f;
+	const double s = 2. * sigma * sigma;
+
+	int i = 0;
+	//for (float x = -mid_h; x <= mid_h; ++x) 
+	for (float y = -mid_w; y <= mid_w; ++y, ++i)
+		kernel[i] = (exp(-(y * y) / s)) / (M_PI * s);
+
+	double sum = 1. / std::accumulate(&kernel[0], &kernel[height * width], 0.);
+	for (int i = 0; i < height * width; ++i) kernel[i] *= sum;
+	printf("\nsum %f\n", std::accumulate(&kernel[0], &kernel[height * width], 0.));
+}
 
 void generate_table(uint32_t* crc_table)
 {
@@ -194,7 +227,6 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	pocketfft::shape_t shape_col{ sizes[0] };
 	pocketfft::shape_t shape_row{ sizes[1] };
 
-	//std::complex<float>* kerf_1D_row = new std::complex<float>[sizes[0] / 2 + 1];
 	std::vector<std::complex<float>> kerf_1D_col(sizes[0] / 2 + 1);
 	std::complex<float>* kerf_1D_row;
 	float* kernel_1D_col = new float[sizes[0]]();
@@ -202,12 +234,12 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_col, kerf_1D_col.data(), 1.f, 0);
 	delete[] kernel_1D_col;
 
-	//since row will be iterated for a length of sizes[0] but its length ends at (sizes[0]/2 + 1), we resize and reflect, with index kerf_1D_row[sizes[0] / 2 + 1] as pivot
+	//since col will be iterated for a length of sizes[0] but its length ends at (sizes[0]/2 + 1), we resize and reflect, with index kerf_1D_col[sizes[0] / 2 + 1] as pivot
 	//explanation "In case of real (single-channel) data, the output spectrum of the forward Fourier transform or input spectrum of the inverse Fourier transform can be represented in a packed format called CCS (complex-conjugate-symmetrical)" from - OpenCV Documentation
 	kerf_1D_col.resize(sizes[0]);
 	std::copy_n(kerf_1D_col.rbegin() + (sizes[0] / 2.f + .5f), kerf_1D_col.size() - (sizes[0] / 2 + 1), kerf_1D_col.begin() + (sizes[0] / 2 + 1));
 
-	//calculate kernel for col dimension and his DFT if the length of cols is not the same of rows
+	//calculate kernel for row dimension and his DFT if the length of rows is not the same of cols
 	if (sizes[0] != sizes[1]) {
 		kerf_1D_row = new std::complex<float>[sizes[1] / 2 + 1];
 		float* kernel_1D_row = new float[sizes[1]]();
@@ -302,15 +334,14 @@ void pocketfft_experimental(cv::Mat image, int nsmooth)
 	pocketfft::shape_t shape_col{ sizes[0] };
 	pocketfft::shape_t shape_row{ sizes[1] };
 
-	//std::complex<float>* kerf_1D_row = new std::complex<float>[sizes[0] / 2 + 1];
-	std::vector<std::complex<float>> kerf_1D_col(sizes[0] / 2 + 1);
+	std::complex<float>* kerf_1D_col = new std::complex<float>[sizes[0] / 2 + 1];
 	std::complex<float>* kerf_1D_row;
 	float* kernel_1D_col = new float[sizes[0]]();
 	make_kernel_1D(kernel_1D_col, nsmooth * nsmooth, shape_col[0]);
-	pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_col, kerf_1D_col.data(), 1.f, 0);
+	pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_col, kerf_1D_col, 1.f, 0);
 	delete[] kernel_1D_col;
 
-	//calculate kernel for col dimension and his DFT if the length of cols is not the same of rows
+	//calculate kernel for row dimension and his DFT if the length of rows is not the same of cols
 	if (sizes[0] != sizes[1]) {
 		kerf_1D_row = new std::complex<float>[sizes[1] / 2 + 1];
 		float* kernel_1D_row = new float[sizes[1]]();
@@ -319,7 +350,7 @@ void pocketfft_experimental(cv::Mat image, int nsmooth)
 		delete[] kernel_1D_row;
 	}
 	else
-		kerf_1D_row = kerf_1D_col.data();
+		kerf_1D_row = kerf_1D_col;
 
 	int ndata = sizes[0] * sizes[1];
 
@@ -348,6 +379,7 @@ void pocketfft_experimental(cv::Mat image, int nsmooth)
 	}
 	if (sizes[0] != sizes[1])
 		delete[] kerf_1D_row;
+	delete[] kerf_1D_col;
 
 	printf("PocketFFT 1D experimental: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 	cv::merge(temp, 3, image);
