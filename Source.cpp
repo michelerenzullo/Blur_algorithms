@@ -324,28 +324,26 @@ void pocketfft_experimental(cv::Mat image, int nsmooth)
 	int ndata = sizes[0] * sizes[1];
 
 	for (int i = 0; i < 3; ++i) {
-		std::vector<float> resf_(sizes[0] * sizes[1]);
+		std::vector<float> resf(sizes[0] * sizes[1]);
 #pragma omp parallel for
 		for (int j = 0; j < sizes[0]; ++j) {
-			std::vector<std::complex<float>> resf(sizes[1] / 2 + 1);
-			pocketfft::r2c(shape_row, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, (float*)temp[i].data + j * sizes[1], resf.data(), 1.f, 0);
-			for (int i = 0; i < sizes[1] / 2 + 1; ++i) resf[i] *= kerf_1D_row[i];
-			//std::transform(&kerf_1D_col[0], &kerf_1D_col[sizes[1] / 2 + 1], &resf[0], &resf[sizes[1] / 2 + 1], std::multiplies<std::complex<float>>());
-			pocketfft::c2r(shape_row, strided_out_1D, strided_1D, axes_1D, pocketfft::BACKWARD, resf.data(), (float*)temp[i].data + j * sizes[1], 1.f / sizes[1], 0);
+			std::vector<std::complex<float>> tile(sizes[1] / 2 + 1);
+			pocketfft::r2c(shape_row, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, (float*)temp[i].data + j * sizes[1], tile.data(), 1.f, 0);
+			for (int i = 0; i < sizes[1] / 2 + 1; ++i) tile[i] *= kerf_1D_row[i];
+			pocketfft::c2r(shape_row, strided_out_1D, strided_1D, axes_1D, pocketfft::BACKWARD, tile.data(), (float*)temp[i].data + j * sizes[1], 1.f / sizes[1], 0);
 
 		}
-		flip_block<float, 1>((float*)temp[i].data, resf_.data(), sizes[1], sizes[0]);
+		flip_block<float, 1>((float*)temp[i].data, resf.data(), sizes[1], sizes[0]);
 
 #pragma omp parallel for
 		for (int j = 0; j < sizes[1]; ++j) {
-			std::vector<std::complex<float>> resf(sizes[0] / 2 + 1);
-			pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, resf_.data() + j * sizes[0], resf.data(), 1.f, 0);
-			for (int i = 0; i < sizes[0] / 2 + 1; ++i) resf[i] *= kerf_1D_col[i];
-			//std::transform(&kerf_1D_row[0], &kerf_1D_row[sizes[0] / 2 + 1], &resf[0], &resf[sizes[0] / 2 + 1], std::multiplies<std::complex<float>>());
-			pocketfft::c2r(shape_col, strided_out_1D, strided_1D, axes_1D, pocketfft::BACKWARD, resf.data(), resf_.data() + j * sizes[0], 1.f / sizes[0], 0);
+			std::vector<std::complex<float>> tile(sizes[0] / 2 + 1);
+			pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, resf.data() + j * sizes[0], tile.data(), 1.f, 0);
+			for (int i = 0; i < sizes[0] / 2 + 1; ++i) tile[i] *= kerf_1D_col[i];
+			pocketfft::c2r(shape_col, strided_out_1D, strided_1D, axes_1D, pocketfft::BACKWARD, tile.data(), resf.data() + j * sizes[0], 1.f / sizes[0], 0);
 		}
 
-		flip_block<float, 1>(resf_.data(), (float*)temp[i].data, sizes[0], sizes[1]);
+		flip_block<float, 1>(resf.data(), (float*)temp[i].data, sizes[0], sizes[1]);
 
 	}
 	if (sizes[0] != sizes[1])
@@ -442,38 +440,38 @@ void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 			pffft::AlignedVector<float> resf(ndata);
 
 			pffft::Fft<float> fft_rows(sizes[1]);
-			pffft::AlignedVector<float> resf_(sizes[1]);
+			pffft::AlignedVector<float> tile(sizes[1]);
 			pffft::AlignedVector<float> work = fft_rows.internalLayoutVector();
 			for (int j = 0; j < sizes[0]; ++j) {
 
-				std::copy_n(&((float*)temp[i].data)[j * sizes[1]], sizes[1], resf_.begin());
+				std::copy_n(&((float*)temp[i].data)[j * sizes[1]], sizes[1], tile.begin());
 
-				fft_rows.forwardToInternalLayout(resf_, work);
+				fft_rows.forwardToInternalLayout(tile, work);
 				fft_rows.convolve(work, kerf_1D_row, work, 1.f / sizes[1]);
-				fft_rows.inverseFromInternalLayout(work, resf_);
-				//std::transform(resf_.begin(), resf_.end(), resf_.begin(), [&sizes](auto i) {return i * (1.f / sizes[1]); });
+				fft_rows.inverseFromInternalLayout(work, tile);
+				//std::transform(tile.begin(), tile.end(), tile.begin(), [&sizes](auto i) {return i * (1.f / sizes[1]); });
 
 				//save the 1st pass row by row in the output vector
-				std::copy(resf_.begin(), resf_.end(), resf.begin() + j * sizes[1]);
+				std::copy(tile.begin(), tile.end(), resf.begin() + j * sizes[1]);
 			}
 
 			//transpose cache-friendly, took from FastBoxBlur
 			flip_block<float, 1>((float*)resf.data(), ((float*)temp[i].data), (int)sizes[1], (int)sizes[0]);
 
 			pffft::Fft<float> fft_cols(sizes[0]);
-			resf_.resize(sizes[0]);
+			tile.resize(sizes[0]);
 			work = fft_cols.internalLayoutVector();
 			for (int j = 0; j < sizes[1]; ++j) {
 
-				std::copy_n(&((float*)temp[i].data)[j * sizes[0]], sizes[0], resf_.begin());
+				std::copy_n(&((float*)temp[i].data)[j * sizes[0]], sizes[0], tile.begin());
 
-				fft_cols.forwardToInternalLayout(resf_, work);
+				fft_cols.forwardToInternalLayout(tile, work);
 				fft_cols.convolve(work, kerf_1D_col, work, 1.f / sizes[0]);
-				fft_cols.inverseFromInternalLayout(work, resf_);
-				//std::transform(resf_.begin(), resf_.end(), resf_.begin(), [&sizes](auto i) {return i * (1.f / sizes[0]); });
+				fft_cols.inverseFromInternalLayout(work, tile);
+				//std::transform(tile.begin(), tile.end(), tile.begin(), [&sizes](auto i) {return i * (1.f / sizes[0]); });
 
 				//save the 2nd pass col by col in the output vector
-				std::copy(resf_.begin(), resf_.end(), resf.begin() + j * sizes[0]);
+				std::copy(tile.begin(), tile.end(), resf.begin() + j * sizes[0]);
 
 			}
 			flip_block<float, 1>((float*)resf.data(), ((float*)temp[i].data), (int)sizes[0], (int)sizes[1]);
