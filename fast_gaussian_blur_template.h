@@ -69,6 +69,8 @@ enum BorderPolicy
 template<typename T, int C>
 void horizontal_blur_extend(const T* in, T* out, const int w, const int h, int r)
 {
+    // change the local variable types depending on the template type for faster calculations
+    using calc_type = std::conditional_t<std::is_integral<T>::value, int, float>;
 
     r = 0.5f * (r - 1); //r must be odd, if is even we change a bit the factor
     float iarr = 1.f / (r + r + 1);
@@ -77,7 +79,7 @@ void horizontal_blur_extend(const T* in, T* out, const int w, const int h, int r
     for (int i = 0; i < h; i++)
     {
         int ti = i * w, li = ti - r - 1, ri = ti + r;   // current index, left index, right index
-        int fv[C], lv[C], acc[C];             // first value, last value, sliding accumulator
+        calc_type fv[C], lv[C], acc[C];             // first value, last value, sliding accumulator
 
         for (int ch = 0; ch < C; ++ch)
         {
@@ -119,11 +121,12 @@ void horizontal_blur_extend(const T* in, T* out, const int w, const int h, int r
 template<typename T, int C>
 void horizontal_blur_kernel_crop(const T* in, T* out, const int w, const int h, const int r)
 {
+    using calc_type = std::conditional_t<std::is_integral<T>::value, int, float>;
 #pragma omp parallel for
     for (int i = 0; i < h; i++)
     {
         int ti = i * w, li = ti - r - 1, ri = ti + r;   // current index, left index, right index
-        float acc[C];                           // sliding accumulator
+        calc_type acc[C];                           // sliding accumulator
 
         for (int ch = 0; ch < C; ++ch)
         {

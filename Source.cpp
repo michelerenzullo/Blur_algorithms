@@ -35,36 +35,45 @@ inline void FFT(std::complex<float>* Fdata, int n, int sign);
 
 #define M_PI		3.14159265358979323846
 
-void getGaussian(std::vector<double>& kernel, int& height, int& width, const double sigma = 1.)
+int gaussian_window(const double sigma, int max_width = 0) {
+
+	//return an odd width for the kernel, if max is passed check that is not bigger than it
+
+	float radius = sigma * sqrt(2 * log(255)) - 1;
+	int width = radius * 2 + .5f;
+	if (max_width) width = std::min(width, max_width);
+
+	if (width % 2 == 0) ++width;
+
+	printf("sigma %f radius %f - width %d - max_width %d\n", sigma, radius, width, max_width);
+
+	return width;
+}
+
+void getGaussian(std::vector<float>& kernel, const double sigma, int width = 0, int FFT_length = 0)
 {
-	float epsilon = 0.01f;
-	if (height == 0) {
-		float x = (sqrt(-2 * pow(sigma, 2) * log(epsilon * sigma * sqrt(2 * M_PI))));
-		float radius = ceil(x);
-		int ksize = (1 + 2 * radius);
-		height = ksize;
-		printf("x %f - radius %f - width %d\n", x, radius, ksize);
-	}
-	if (width == 0) {
-		float x = (sqrt(-2 * pow(sigma, 2) * log(epsilon * sigma * sqrt(2 * M_PI))));
-		float radius = ceil(x);
-		int ksize = (1 + 2 * radius);
-		width = ksize;
-		printf("x %f - radius %f - width %d\n", x, radius, ksize);
-	}
-	kernel.resize(height * width);
-	float mid_h = (height - 1) / 2.f;
+
+	if (!width) width = gaussian_window(sigma);
+
+	kernel.resize(width);
+
 	float mid_w = (width - 1) / 2.f;
 	const double s = 2. * sigma * sigma;
 
 	int i = 0;
-	//for (float x = -mid_h; x <= mid_h; ++x) 
+
 	for (float y = -mid_w; y <= mid_w; ++y, ++i)
 		kernel[i] = (exp(-(y * y) / s)) / (M_PI * s);
 
-	double sum = 1. / std::accumulate(&kernel[0], &kernel[height * width], 0.);
-	for (int i = 0; i < height * width; ++i) kernel[i] *= sum;
-	printf("\nsum %f\n", std::accumulate(&kernel[0], &kernel[height * width], 0.));
+	double sum = 1. / std::accumulate(&kernel[0], &kernel[width], 0.);
+	for (int i = 0; i < width; ++i) kernel[i] *= sum;
+	printf("\nsum %f\n", std::accumulate(&kernel[0], &kernel[width], 0.));
+
+	//fit the kernel in the FFT_length and shift the center to avoid circular convolution
+	if (FFT_length) {
+		kernel.resize(FFT_length);
+		std::rotate(kernel.rbegin(), kernel.rbegin() + (kernel.size() - (width - 1) / 2), kernel.rend());
+	}
 }
 
 void generate_table(uint32_t* crc_table)
@@ -185,28 +194,30 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	//pocketfft can handle non-small prime numbers decomposition of ndata but becomes slower, pffft cannot handle them and force you to add more pad
 
 	image.convertTo(image, CV_32FC3);
+	int passes = 2; //we are using a kernel convolved with itself, is like running two passes of the original kernel
+	int pad = (nsmooth * nsmooth - 1) / 2 * passes;
 	//top - bottom - left - right margin
-	int pad[4] = { nsmooth * nsmooth - 1, nsmooth * nsmooth - 1, nsmooth * nsmooth - 1, nsmooth * nsmooth - 1 };
+	int border[4] = { pad, pad, pad, pad };
 
 	//absolute min padding to fit the kernel
-	size_t sizes[2] = { image.size[0] + pad[0] + pad[1], image.size[1] + pad[2] + pad[3] };
+	size_t sizes[2] = { image.size[0] + border[0] + border[1], image.size[1] + border[2] + border[3] };
 
 	//if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
 	for (int i = 0; i < 2; ++i) {
 		if (!isValidSize(sizes[i]))
 		{
-			//printf("pre %d %d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], pad[2], pad[3], pffft::Fft<float>::isValidSize(sizes[i]));
+			//printf("pre %d %d %d %d %d %d %d\n", sizes[0], sizes[1], border[0], border[1], border[2], border[3], pffft::Fft<float>::isValidSize(sizes[i]));
 			int new_size = nearestTransformSize(sizes[i]);
 			int new_pad = (new_size - sizes[i]);
 			sizes[i] = new_size;
-			pad[i * 2 + 0] += new_pad / 2; //floor - fix for new_pad when not even
-			pad[i * 2 + 1] += new_pad / 2.f + 0.5f; //ceil if odd - fix for new_pad when not even
+			border[i * 2 + 0] += new_pad / 2; //floor - fix for new_pad when not even
+			border[i * 2 + 1] += new_pad / 2.f + 0.5f; //ceil if odd - fix for new_pad when not even
 
-			//printf("post %d %d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], pad[2], pad[3], pffft::Fft<float>::isValidSize(sizes[i]));
+			//printf("post %d %d %d %d %d %d %d\n", sizes[0], sizes[1], border[0], border[1], border[2], border[3], pffft::Fft<float>::isValidSize(sizes[i]));
 		}
 	}
 
-	cv::copyMakeBorder(image, image, pad[0], pad[1], pad[2], pad[3], CV_HAL_BORDER_REFLECT);
+	cv::copyMakeBorder(image, image, border[0], border[1], border[2], border[3], CV_HAL_BORDER_REFLECT);
 	//printf("%d %d\n", image.size[0], image.size[1]);
 
 	cv::Mat temp[3];
@@ -290,20 +301,26 @@ void pocketfft_(cv::Mat image, int nsmooth)
 	cv::merge(temp, 3, image);
 
 	image.convertTo(image, CV_8UC3);
-	cv::Rect myroi(pad[2], pad[0], sizes[1] - pad[2] - pad[3], sizes[0] - pad[0] - pad[1]);
+	cv::Rect myroi(border[2], border[0], sizes[1] - border[2] - border[3], sizes[0] - border[0] - border[1]);
 	cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
 
 }
 
 
-void pocketfft_experimental(cv::Mat image, int nsmooth)
+void pocketfft_1D(cv::Mat image, double nsmooth)
 {
 	image.convertTo(image, CV_32FC3);
+
+	double sigma = nsmooth;
+	int kSize = gaussian_window(sigma, std::max(image.size[0], image.size[1]));
+
+	int passes = 1; //we are using 1 pass of the gaussian kernel
+	int pad = (kSize - 1) / 2 * passes;
 	//top - bottom - left - right margin
-	int pad[4] = { nsmooth * nsmooth - 1, nsmooth * nsmooth - 1, nsmooth * nsmooth - 1, nsmooth * nsmooth - 1 };
+	int border[4] = { pad, pad, pad, pad };
 
 	//absolute min padding to fit the kernel
-	size_t sizes[2] = { image.size[0] + pad[0] + pad[1], image.size[1] + pad[2] + pad[3] };
+	size_t sizes[2] = { image.size[0] + border[0] + border[1], image.size[1] + border[2] + border[3] };
 
 	//if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
 	for (int i = 0; i < 2; ++i) {
@@ -313,13 +330,13 @@ void pocketfft_experimental(cv::Mat image, int nsmooth)
 			int new_size = nearestTransformSize(sizes[i]);
 			int new_pad = (new_size - sizes[i]);
 			sizes[i] = new_size;
-			pad[i * 2 + 0] += new_pad / 2; //floor - fix for new_pad when not even
-			pad[i * 2 + 1] += new_pad / 2.f + 0.5f; //ceil if odd - fix for new_pad when not even
+			border[i * 2 + 0] += new_pad / 2; //floor - fix for new_pad when not even
+			border[i * 2 + 1] += new_pad / 2.f + 0.5f; //ceil if odd - fix for new_pad when not even
 
 		}
 	}
 
-	cv::copyMakeBorder(image, image, pad[0], pad[1], pad[2], pad[3], CV_HAL_BORDER_REFLECT);
+	cv::copyMakeBorder(image, image, border[0], border[1], border[2], border[3], CV_HAL_BORDER_REFLECT);
 
 	cv::Mat temp[3];
 	cv::split(image, temp);
@@ -336,18 +353,21 @@ void pocketfft_experimental(cv::Mat image, int nsmooth)
 
 	std::complex<float>* kerf_1D_col = new std::complex<float>[sizes[0] / 2 + 1];
 	std::complex<float>* kerf_1D_row;
-	float* kernel_1D_col = new float[sizes[0]]();
-	make_kernel_1D(kernel_1D_col, nsmooth * nsmooth, shape_col[0]);
-	pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_col, kerf_1D_col, 1.f, 0);
-	delete[] kernel_1D_col;
+	std::vector<float> kernel_1D_col;
+	getGaussian(kernel_1D_col, sigma, kSize, sizes[0]);
+	printf("sizes[0] %d - width %d\n", sizes[0], kSize);
+
+	pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_col.data(), kerf_1D_col, 1.f, 0);
 
 	//calculate kernel for row dimension and his DFT if the length of rows is not the same of cols
 	if (sizes[0] != sizes[1]) {
 		kerf_1D_row = new std::complex<float>[sizes[1] / 2 + 1];
-		float* kernel_1D_row = new float[sizes[1]]();
-		make_kernel_1D(kernel_1D_row, nsmooth * nsmooth, shape_row[0]);
-		pocketfft::r2c(shape_row, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_row, kerf_1D_row, 1.f, 0);
-		delete[] kernel_1D_row;
+		//float* kernel_1D_row = new float[sizes[1]]();
+		//make_kernel_1D(kernel_1D_row, nsmooth * nsmooth, shape_row[0]);
+		std::vector<float> kernel_1D_row;
+		getGaussian(kernel_1D_row, sigma, kSize, sizes[1]);
+		pocketfft::r2c(shape_row, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_row.data(), kerf_1D_row, 1.f, 0);
+		//delete[] kernel_1D_row;
 	}
 	else
 		kerf_1D_row = kerf_1D_col;
@@ -385,7 +405,7 @@ void pocketfft_experimental(cv::Mat image, int nsmooth)
 	cv::merge(temp, 3, image);
 
 	image.convertTo(image, CV_8UC3);
-	cv::Rect myroi(pad[2], pad[0], sizes[1] - pad[2] - pad[3], sizes[0] - pad[0] - pad[1]);
+	cv::Rect myroi(border[2], border[0], sizes[1] - border[2] - border[3], sizes[0] - border[0] - border[1]);
 	cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
 
 }
@@ -395,26 +415,28 @@ void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 {
 
 	image.convertTo(image, CV_32FC3);
+	int passes = 2; //we are using a kernel convolved with itself, is like running two passes of the original kernel
+	int pad = (nsmooth * nsmooth - 1) / 2 * passes;
 	//top - bottom - left - right margin
-	int pad[4] = { nsmooth * nsmooth - 1, nsmooth * nsmooth - 1, nsmooth * nsmooth - 1, nsmooth * nsmooth - 1 };
+	int border[4] = { pad, pad, pad, pad };
 
 	//absolute min padd
-	size_t sizes[2] = { image.size[0] + pad[0] + pad[1], image.size[1] + pad[2] + pad[3] };
+	size_t sizes[2] = { image.size[0] + border[0] + border[1], image.size[1] + border[2] + border[3] };
 
 	//if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
 	for (int i = 0; i < 2; ++i) {
 		if (!pffft::Fft<float>::isValidSize(sizes[i]))
 		{
-			//printf("pre %d %d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], pad[2], pad[3], pffft::Fft<float>::isValidSize(sizes[i]));
+			//printf("pre %d %d %d %d %d %d %d\n", sizes[0], sizes[1], border[0], border[1], border[2], border[3], pffft::Fft<float>::isValidSize(sizes[i]));
 			int new_size = pffft::Fft<float>::nearestTransformSize(sizes[i]);
 			int new_pad = (new_size - sizes[i]);
 			sizes[i] = new_size;
-			pad[i * 2 + 0] += new_pad / 2; //floor - fix for new_pad when not even
-			pad[i * 2 + 1] += new_pad / 2.f + 0.5f; //ceil if odd - fix for new_pad when not even
-			//printf("post %d %d %d %d %d %d %d\n", sizes[0], sizes[1], pad[0], pad[1], pad[2], pad[3], pffft::Fft<float>::isValidSize(sizes[i]));
+			border[i * 2 + 0] += new_pad / 2; //floor - fix for new_pad when not even
+			border[i * 2 + 1] += new_pad / 2.f + 0.5f; //ceil if odd - fix for new_pad when not even
+			//printf("post %d %d %d %d %d %d %d\n", sizes[0], sizes[1], border[0], border[1], border[2], border[3], pffft::Fft<float>::isValidSize(sizes[i]));
 		}
 	}
-	cv::copyMakeBorder(image, image, pad[0], pad[1], pad[2], pad[3], CV_HAL_BORDER_REFLECT);
+	cv::copyMakeBorder(image, image, border[0], border[1], border[2], border[3], CV_HAL_BORDER_REFLECT);
 
 	cv::Mat temp[3];
 	cv::split(image, temp);
@@ -461,7 +483,7 @@ void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 
 	int ndata = sizes[0] * sizes[1];
 	std::vector<pffft::AlignedVector<float>> resf;
-	if (!fast) 
+	if (!fast)
 		for (int i = 0; i < 3; ++i)
 			resf.push_back(pffft::AlignedVector<float>(ndata) /* same as fft_kernel.valueVector() */);
 
@@ -526,7 +548,7 @@ void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 	cv::merge(temp, 3, image);
 
 	image.convertTo(image, CV_8UC3);
-	cv::Rect myroi(pad[2], pad[0], sizes[1] - pad[2] - pad[3], sizes[0] - pad[0] - pad[1]);
+	cv::Rect myroi(border[2], border[0], sizes[1] - border[2] - border[3], sizes[0] - border[0] - border[1]);
 	cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
 }
 
@@ -579,18 +601,18 @@ void NewBlur(cv::Mat monoimage, int nsmooth)
 
 }
 
-void Test(cv::Mat image, int flag = 0, int nsmooth = 5, bool fast_ = 1)
+void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 {
 
 	start_0 = std::chrono::steady_clock::now();
 
-	if (flag == 5) pocketfft_experimental(image, nsmooth);
+	if (flag == 5) pocketfft_1D(image, nsmooth);
 	else if (flag == 4) {
 
 		//add extra pad by reflection to keep edges details
-		int pad[2] = { (nsmooth * nsmooth - 1), (nsmooth * nsmooth - 1) };
-		size_t sizes[2] = { image.size[0] + pad[0] * 2, image.size[1] + pad[1] * 2 };
-		cv::copyMakeBorder(image, image, pad[0], pad[0], pad[1], pad[1], CV_HAL_BORDER_REFLECT);
+		int border[2] = { (nsmooth * nsmooth - 1), (nsmooth * nsmooth - 1) };
+		size_t sizes[2] = { image.size[0] + border[0] * 2, image.size[1] + border[1] * 2 };
+		cv::copyMakeBorder(image, image, border[0], border[0], border[1], border[1], CV_HAL_BORDER_REFLECT);
 
 		std::chrono::time_point<std::chrono::steady_clock> start_5 = std::chrono::steady_clock::now();
 		//prepare temp vector
@@ -605,7 +627,7 @@ void Test(cv::Mat image, int flag = 0, int nsmooth = 5, bool fast_ = 1)
 		}
 
 		std::chrono::time_point<std::chrono::steady_clock> start_1 = std::chrono::steady_clock::now();
-		flip_block(image.data, image_out_ptr, image.size[1], image.size[0], 3);
+		flip_block<uchar,3>(image.data, image_out_ptr, image.size[1], image.size[0]);
 		std::chrono::time_point<std::chrono::steady_clock> start_2 = std::chrono::steady_clock::now();
 
 		for (int i = 0; i < passes; ++i) {
@@ -614,7 +636,7 @@ void Test(cv::Mat image, int flag = 0, int nsmooth = 5, bool fast_ = 1)
 		}
 
 		std::chrono::time_point<std::chrono::steady_clock> start_3 = std::chrono::steady_clock::now();
-		flip_block(image_out_ptr, image.data, image.size[0], image.size[1], 3);
+		flip_block<uchar,3>(image_out_ptr, image.data, image.size[0], image.size[1]);
 		std::chrono::time_point<std::chrono::steady_clock> start_4 = std::chrono::steady_clock::now();
 
 		//printf("1st transp : %f\n", std::chrono::duration<double, std::milli>(start_2 - start_1).count());
@@ -624,7 +646,7 @@ void Test(cv::Mat image, int flag = 0, int nsmooth = 5, bool fast_ = 1)
 		//printf("fastblur with padding: %f\n", std::chrono::duration<double, std::milli>(start_4 - start_0).count());
 
 		//save image cropped
-		cv::Rect myroi(pad[1], pad[0], sizes[1] - pad[1] * 2, sizes[0] - pad[0] * 2);
+		cv::Rect myroi(border[1], border[0], sizes[1] - border[1] * 2, sizes[0] - border[0] * 2);
 		cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
 
 	}
@@ -852,7 +874,7 @@ inline void FFT(std::complex<float>* Fdata, int n, int sign)
 int main(int argc, char* argv[]) {
 	char* file = argv[4];
 	int flag = atoi(argv[1]); //5 pocketFFT 1D - 4 FastBoxBlur - 3 pffft - 2 pocketfft - 1 TJ FFT - 0 OpenCV
-	int nsmooth = atoi(argv[2]);
+	double nsmooth = atof(argv[2]);
 	bool fast_pffft = atoi(argv[3]); //only for pffft: fast convolve flag ( skip reordering of z domain)
 
 	cv::Mat noisy = cv::imread(file);
