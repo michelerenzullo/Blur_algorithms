@@ -35,11 +35,11 @@ inline void FFT(std::complex<float>* Fdata, int n, int sign);
 
 #define M_PI		3.14159265358979323846
 
-int gaussian_window(const double sigma, int max_width = 0) {
+int gaussian_window(const double sigma, const int max_width = 0) {
 
 	//return an odd width for the kernel, if max is passed check that is not bigger than it
 
-	float radius = sigma * sqrt(2 * log(255)) - 1;
+	const float radius = sigma * sqrt(2 * log(255)) - 1;
 	int width = radius * 2 + .5f;
 	if (max_width) width = std::min(width, max_width);
 
@@ -55,9 +55,9 @@ void getGaussian(std::vector<float>& kernel, const double sigma, int width = 0, 
 
 	if (!width) width = gaussian_window(sigma);
 
-	kernel.resize(width);
+	kernel.resize(FFT_length ? FFT_length : width);
 
-	float mid_w = (width - 1) / 2.f;
+	const float mid_w = (width - 1) / 2.f;
 	const double s = 2. * sigma * sigma;
 
 	int i = 0;
@@ -65,16 +65,15 @@ void getGaussian(std::vector<float>& kernel, const double sigma, int width = 0, 
 	for (float y = -mid_w; y <= mid_w; ++y, ++i)
 		kernel[i] = (exp(-(y * y) / s)) / (M_PI * s);
 
-	double sum = 1. / std::accumulate(&kernel[0], &kernel[width], 0.);
+	const double sum = 1. / std::accumulate(&kernel[0], &kernel[width], 0.);
 	for (int i = 0; i < width; ++i) kernel[i] *= sum;
 	printf("\nsum %f\n", std::accumulate(&kernel[0], &kernel[width], 0.));
 
 	//fit the kernel in the FFT_length and shift the center to avoid circular convolution
-	if (FFT_length) {
-		kernel.resize(FFT_length);
-		std::rotate(kernel.rbegin(), kernel.rbegin() + (kernel.size() - (width - 1) / 2), kernel.rend());
-	}
+	if (FFT_length)
+		std::rotate(kernel.rbegin(), kernel.rbegin() + (kernel.size() - width / 2), kernel.rend());
 }
+
 
 void generate_table(uint32_t* crc_table)
 {
@@ -271,7 +270,8 @@ void pocketfft_(cv::Mat image, int nsmooth)
 		// mul image_FFT with kernel_1D_row and kernel_1D_col 
 		for (int i = 0; i < sizes[0]; ++i) {
 			for (int j = 0; j < (sizes[1] / 2 + 1); ++j) {
-				resf[i * (sizes[1] / 2 + 1) + j] *= kerf_1D_row[j] * kerf_1D_col[i];
+				//multiply only for the real part since the imaginary part of a centered kernel is 0, no performance improvements found
+				resf[i * (sizes[1] / 2 + 1) + j] *= std::real(kerf_1D_row[j]) * std::real(kerf_1D_col[i]);
 			}
 		}
 
@@ -380,7 +380,7 @@ void pocketfft_1D(cv::Mat image, double nsmooth)
 		for (int j = 0; j < sizes[0]; ++j) {
 			std::vector<std::complex<float>> tile(sizes[1] / 2 + 1);
 			pocketfft::r2c(shape_row, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, (float*)temp[i].data + j * sizes[1], tile.data(), 1.f, 0);
-			for (int i = 0; i < sizes[1] / 2 + 1; ++i) tile[i] *= kerf_1D_row[i];
+			for (int i = 0; i < sizes[1] / 2 + 1; ++i) tile[i] *= std::real(kerf_1D_row[i]); //since the imaginary part is null, ignore it
 			pocketfft::c2r(shape_row, strided_out_1D, strided_1D, axes_1D, pocketfft::BACKWARD, tile.data(), (float*)temp[i].data + j * sizes[1], 1.f / sizes[1], 0);
 
 		}
@@ -390,7 +390,7 @@ void pocketfft_1D(cv::Mat image, double nsmooth)
 		for (int j = 0; j < sizes[1]; ++j) {
 			std::vector<std::complex<float>> tile(sizes[0] / 2 + 1);
 			pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, resf.data() + j * sizes[0], tile.data(), 1.f, 0);
-			for (int i = 0; i < sizes[0] / 2 + 1; ++i) tile[i] *= kerf_1D_col[i];
+			for (int i = 0; i < sizes[0] / 2 + 1; ++i) tile[i] *= std::real(kerf_1D_col[i]); //since the imaginary part is null, ignore it
 			pocketfft::c2r(shape_col, strided_out_1D, strided_1D, axes_1D, pocketfft::BACKWARD, tile.data(), resf.data() + j * sizes[0], 1.f / sizes[0], 0);
 		}
 
@@ -627,7 +627,7 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 		}
 
 		std::chrono::time_point<std::chrono::steady_clock> start_1 = std::chrono::steady_clock::now();
-		flip_block<uchar,3>(image.data, image_out_ptr, image.size[1], image.size[0]);
+		flip_block<uchar, 3>(image.data, image_out_ptr, image.size[1], image.size[0]);
 		std::chrono::time_point<std::chrono::steady_clock> start_2 = std::chrono::steady_clock::now();
 
 		for (int i = 0; i < passes; ++i) {
@@ -636,7 +636,7 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 		}
 
 		std::chrono::time_point<std::chrono::steady_clock> start_3 = std::chrono::steady_clock::now();
-		flip_block<uchar,3>(image_out_ptr, image.data, image.size[0], image.size[1]);
+		flip_block<uchar, 3>(image_out_ptr, image.data, image.size[0], image.size[1]);
 		std::chrono::time_point<std::chrono::steady_clock> start_4 = std::chrono::steady_clock::now();
 
 		//printf("1st transp : %f\n", std::chrono::duration<double, std::milli>(start_2 - start_1).count());
@@ -667,10 +667,11 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 	else
 	{
 
-		nsmooth *= nsmooth;
+		//nsmooth *= nsmooth;
 
-		cv::blur(image, image, cv::Size(nsmooth, nsmooth));
-		cv::blur(image, image, cv::Size(nsmooth, nsmooth));
+		//cv::blur(image, image, cv::Size(nsmooth, nsmooth));
+		//cv::blur(image, image, cv::Size(nsmooth, nsmooth));
+		cv::GaussianBlur(image, image, cv::Size(0, 0), nsmooth);
 		printf("OpenCV blur: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 
 		cv::imwrite("C:/Users/Michele/Downloads/c_.png", image);
@@ -870,6 +871,7 @@ inline void FFT(std::complex<float>* Fdata, int n, int sign)
 	if (sign == -1)  for (i = 0; i < n; i++) Fdata[i] = Fdata[i] / float(n);
 	return;
 } /* end of FFT */
+
 
 int main(int argc, char* argv[]) {
 	char* file = argv[4];
