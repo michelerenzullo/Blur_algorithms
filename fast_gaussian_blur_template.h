@@ -127,17 +127,17 @@ template<typename T, int C>
 void horizontal_blur_kernel_reflect(const T* in, T* out, const int w, const int h, int r)
 {
 	// change the local variable types depending on the template type for faster calculations
-	using calc_type = std::conditional_t<std::is_integral<T>::value, int, float>;
+	using calc_type = std::conditional_t<std::is_integral_v<T>, uint32_t, float>;
 
-	r = std::min(r, w); //reflect it's possible till the middle of the image
 	r = 0.5f * (r - 1);
+	r = std::min(r, w - 1);
+
 	const float iarr = 1.f / (r + r + 1);
 
 #pragma omp parallel for
 	for (int i = 0; i < h; i++)
 	{
-		const int begin = i * w;
-		const int end = begin + w;
+		const int begin = i * w, end = begin + w, max_end = end - 1;
 		int li = begin + r, ri = begin + r + 1; // left index(mirrored in the beginning), right index(mirrored at the end)
 		calc_type acc[C] = {};
 
@@ -159,22 +159,26 @@ void horizontal_blur_kernel_reflect(const T* in, T* out, const int w, const int 
 
 		////////////////////////////////////////////////////////////////////////////////////////////////////
 
+
 		for (int j = begin + 1; j < begin + r + 1; ++j)
 		{
 			for (int ch = 0; ch < C; ++ch)
 			{
-				acc[ch] += in[ri * C + ch] - in[li * C + ch];
-				out[j * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types
+				//ri < end ? ri : max_end - ri % max_end   <--  reading in a reverse way 
+				//when reached the end of the row buffer and starting to read the "emulated" right pad
+				acc[ch] += in[(ri < end ? ri : max_end - ri % max_end) * C + ch] - in[li * C + ch];
+				out[j * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0);
 			}
 			--li, ++ri;
 		}
 
+		//this loop won't be executed when r > w / 2 - 2 therefore the end of the image buffer will never be reached
 		for (int j = begin + r + 1; j < end - r - 1; ++j)
 		{
 			for (int ch = 0; ch < C; ++ch)
 			{
 				acc[ch] += in[ri * C + ch] - in[li * C + ch];
-				out[j * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types
+				out[j * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0);
 			}
 			++li, ++ri;
 		}
@@ -183,8 +187,8 @@ void horizontal_blur_kernel_reflect(const T* in, T* out, const int w, const int 
 		{
 			for (int ch = 0; ch < C; ++ch)
 			{
-				acc[ch] += in[ri * C + ch] - in[li * C + ch];
-				out[j * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types
+				acc[ch] += in[(ri < end ? ri : max_end - ri % max_end) * C + ch] - in[li * C + ch];
+				out[j * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0);
 			}
 			++li, --ri;
 		}
@@ -369,7 +373,7 @@ void flip_block(const T* in, T* out, const int w, const int h)
 			T* q = out + y * C + x * h * C;
 
 			const int blockx = std::min(w, x + block) - x;
-			const int blocky = std::min(h, y + block) - y; 
+			const int blocky = std::min(h, y + block) - y;
 			for (int xx = 0; xx < blockx; xx++)
 			{
 				for (int yy = 0; yy < blocky; yy++)

@@ -11,4 +11,7 @@
     <ClInclude Include="Recolour.h" />
     <ClInclude Include="tinyfiledialogs.h" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+  </ItemGroup>
 </Project>
