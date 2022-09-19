@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="Source.cpp" />
+    <ClCompile Include="tinyfiledialogs.c" />
+    <ClCompile Include="UtilitiesGeneral.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="fast_gaussian_blur_template.h" />
+    <ClInclude Include="pocketfft_hdronly.h" />
+    <ClInclude Include="Recolour.h" />
+    <ClInclude Include="tinyfiledialogs.h" />
+  </ItemGroup>
+</Project>

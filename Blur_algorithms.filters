@@ -21,7 +21,7 @@
     <ClCompile Include="tinyfiledialogs.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\..\Downloads\Covolution.cpp">
+    <ClCompile Include="..\..\..\Downloads\Convolution.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Source.cpp">
