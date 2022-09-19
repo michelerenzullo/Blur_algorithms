@@ -48,10 +48,10 @@
 //! \todo Add support for other border policies (wrap, mirror)
 enum BorderPolicy
 {
-    kExtend,
-    kKernelCrop,
-    // kWrap, 
-    // kMirror, 
+	kExtend,
+	kKernelCrop,
+	// kWrap, 
+	// kMirror, 
 };
 
 //!
@@ -66,44 +66,177 @@ enum BorderPolicy
 //! \param[in] h            image height
 //! \param[in] r            box dimension
 //!
+
+// original generic version
 template<typename T, int C>
 void horizontal_blur_extend(const T* in, T* out, const int w, const int h, int r)
 {
-    // change the local variable types depending on the template type for faster calculations
-    using calc_type = std::conditional_t<std::is_integral<T>::value, int, float>;
+	// change the local variable types depending on the template type for faster calculations
+	using calc_type = std::conditional_t<std::is_integral<T>::value, int, float>;
 
-    r = 0.5f * (r - 1); //r must be odd, if is even we change a bit the factor
-    float iarr = 1.f / (r + r + 1);
+	r = 0.5f * (r - 1); //r must be odd, if is even we change a bit the factor
+	const float iarr = 1.f / (r + r + 1);
+
+	int fill[C] = { 0 };
+	if (r > w)
+		for (int ch = 0; ch < C; ++ch)
+			fill[ch] = (r - w);
+
+	const int acc_window = std::min(r, w);
 
 #pragma omp parallel for
-    for (int i = 0; i < h; i++)
-    {
-        int ti = i * w, li = ti - r - 1, ri = ti + r;   // current index, left index, right index
-        calc_type fv[C], lv[C], acc[C];             // first value, last value, sliding accumulator
+	for (int i = 0; i < h; i++)
+	{
+		const int begin = i * w;
+		const int end = begin + w;
 
-        for (int ch = 0; ch < C; ++ch)
-        {
-            fv[ch] = in[ti * C + ch];
-            lv[ch] = in[(ti + w - 1) * C + ch];
-            acc[ch] = (r + 1) * fv[ch];
-        }
+		// current index, left index, right index
+		int ti = begin, li = begin - r - 1, ri = begin + r;
 
-        // initial acucmulation
-        for (int j = 0; j < r; j++)
-            for (int ch = 0; ch < C; ++ch)
-            {
-                acc[ch] += ti + j < ti + w ? in[(ti + j) * C + ch] : lv[ch];
-            }
+		// first value, last value, sliding accumulator
+		calc_type fv[C], lv[C], acc[C];
 
-        // perform filtering
-        for (int j = 0; j < w; j++, ri++, ti++, li++)
-            for (int ch = 0; ch < C; ++ch)
-            {
-                acc[ch] += ri < (i + 1)* w ? in[ri * C + ch] : lv[ch];
-                acc[ch] -= li >= i * w ? in[li * C + ch] : fv[ch];
-                out[ti * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types 
-            }
-    }
+		for (int ch = 0; ch < C; ++ch)
+		{
+			fv[ch] = in[begin * C + ch];
+			lv[ch] = in[(end - 1) * C + ch];
+			acc[ch] = fill[ch] * lv[ch] + (r + 1) * fv[ch];
+		}
+
+		// initial acucmulation
+		for (int j = 0; j < acc_window; j++)
+			for (int ch = 0; ch < C; ++ch)
+			{
+				// prefilling the accumulator with the last value seems slower than/equal to this ternary 
+				acc[ch] += in[(begin + j) * C + ch];
+			}
+
+		// perform filtering
+		for (int j = 0; j < w; j++, ri++, ti++, li++)
+			for (int ch = 0; ch < C; ++ch)
+			{
+				acc[ch] += ri < end ? in[ri * C + ch] : lv[ch];
+				acc[ch] -= li >= begin ? in[li * C + ch] : fv[ch];
+				out[ti * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types 
+			}
+	}
+}
+
+// version for kernels that are correctly sized, that is when r <= w
+template<typename T, int C>
+void horizontal_blur_kernel_reflect(const T* in, T* out, const int w, const int h, int r)
+{
+	// change the local variable types depending on the template type for faster calculations
+	using calc_type = std::conditional_t<std::is_integral<T>::value, int, float>;
+
+	r = std::min(r, w); //reflect it's possible till the middle of the image
+	r = 0.5f * (r - 1);
+	const float iarr = 1.f / (r + r + 1);
+
+#pragma omp parallel for
+	for (int i = 0; i < h; i++)
+	{
+		const int begin = i * w;
+		const int end = begin + w;
+		int li = begin + r, ri = begin + r + 1; // left index(mirrored in the beginning), right index(mirrored at the end)
+		calc_type acc[C] = {};
+
+		// for ksize = 7, and r = 3, and array length = 11
+		// array is [ a b c d e f g h i j k ]
+		// emulated array is [d c b _ a b c d e f g h i j k _ j i h]
+
+		// emulating the left padd: the initial accumulation is (d + c + b + a + b + c + d) --> 2 * (a + b + c + d) - a
+
+		for (int ch = 0; ch < C; ++ch)
+		{
+			for (int j = 0; j <= r; j++)
+				acc[ch] += 2 * in[(begin + j) * C + ch];
+			acc[ch] -= in[begin * C + ch]; // remove extra pivot value
+
+			// calculated first value
+			out[begin * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0);
+		}
+
+		////////////////////////////////////////////////////////////////////////////////////////////////////
+
+		for (int j = begin + 1; j < begin + r + 1; ++j)
+		{
+			for (int ch = 0; ch < C; ++ch)
+			{
+				acc[ch] += in[ri * C + ch] - in[li * C + ch];
+				out[j * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types
+			}
+			--li, ++ri;
+		}
+
+		for (int j = begin + r + 1; j < end - r - 1; ++j)
+		{
+			for (int ch = 0; ch < C; ++ch)
+			{
+				acc[ch] += in[ri * C + ch] - in[li * C + ch];
+				out[j * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types
+			}
+			++li, ++ri;
+		}
+
+		for (int j = end - r - 1; j < end; ++j)
+		{
+			for (int ch = 0; ch < C; ++ch)
+			{
+				acc[ch] += in[ri * C + ch] - in[li * C + ch];
+				out[j * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types
+			}
+			++li, --ri;
+		}
+	}
+}
+
+
+// version for kernels that are too large, that is when r > w
+template<typename T, int C>
+void horizontal_blur_extend_large_kernel(const T* in, T* out, const int w, const int h, int r)
+{
+	// change the local variable types depending on the template type for faster calculations
+	using calc_type = std::conditional_t<std::is_integral<T>::value, int, float>;
+	r = 0.5f * (r - 1);
+	const float iarr = 1.f / (r + r + 1);
+
+	int fill[C] = { 0 };
+	if (r > w)
+		for (int ch = 0; ch < C; ++ch)
+			fill[ch] = (r - w);
+
+	const int acc_window = std::min(r, w);
+
+#pragma omp parallel for
+	for (int i = 0; i < h; i++)
+	{
+		const int begin = i * w;
+		const int end = begin + w;
+		calc_type fv[C], lv[C], acc[C]; // first value, last value, sliding accumulator
+
+		for (int ch = 0; ch < C; ++ch)
+		{
+			fv[ch] = in[begin * C + ch];
+			lv[ch] = in[(end - 1) * C + ch];
+			acc[ch] = fill[ch] * lv[ch] + (r + 1) * fv[ch];
+		}
+
+		// initial acucmulation
+		for (int j = 0; j < acc_window; j++)
+			for (int ch = 0; ch < C; ++ch)
+			{
+				// prefilling the accumulator with the last value seems slower than/equal to this ternary 
+				acc[ch] += in[(begin + j) * C + ch];
+			}
+
+		for (int ti = begin; ti < end; ti++)
+			for (int ch = 0; ch < C; ++ch)
+			{
+				acc[ch] += lv[ch] - fv[ch];
+				out[ti * C + ch] = acc[ch] * iarr + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types 
+			}
+	}
 }
 
 //!
@@ -119,39 +252,39 @@ void horizontal_blur_extend(const T* in, T* out, const int w, const int h, int r
 //! \param[in] r            box dimension
 //!
 template<typename T, int C>
-void horizontal_blur_kernel_crop(const T* in, T* out, const int w, const int h, const int r)
+void horizontal_blur_kernel_crop(const T* in, T* out, const int w, const int h, int r)
 {
-    using calc_type = std::conditional_t<std::is_integral<T>::value, int, float>;
+	// change the local variable types depending on the template type for faster calculations
+	using calc_type = std::conditional_t<std::is_integral<T>::value, int, float>;
+	r = 0.5f * (r - 1); //r must be odd, if is even we change a bit the factor
+
 #pragma omp parallel for
-    for (int i = 0; i < h; i++)
-    {
-        int ti = i * w, li = ti - r - 1, ri = ti + r;   // current index, left index, right index
-        calc_type acc[C];                           // sliding accumulator
+	for (int i = 0; i < h; i++)
+	{
+		const int begin = i * w;
+		const int end = begin + w;
+		int ti = begin, li = ti - r - 1, ri = ti + r;   // current index, left index, right index
+		calc_type acc[C] = {};                       // sliding accumulator
 
-        for (int ch = 0; ch < C; ++ch)
-        {
-            acc[ch] = 0;
-        }
+		// initial acucmulation
+		for (int j = 0; j < std::min(r, w); j++)
+			for (int ch = 0; ch < C; ++ch)
+			{
+				acc[ch] += in[(ti + j) * C + ch];
+			}
 
-        // initial acucmulation
-        for (int j = 0; j < r; j++)
-            for (int ch = 0; ch < C; ++ch)
-            {
-                acc[ch] += ti + j < ti + w ? in[(ti + j) * C + ch] : 0;
-            }
-
-        // perform filtering
-        for (int j = 0; j < w; j++, ri++, ti++, li++)
-            for (int ch = 0; ch < C; ++ch)
-            {
-                acc[ch] += ri < (i + 1)* w ? in[ri * C + ch] : 0;
-                acc[ch] -= li >= i * w ? in[li * C + ch] : 0;
-                int start = std::max(i * w - 1, li);
-                int end = std::min((i + 1) * w - 1, ri);
-                // renormalize kernel
-                out[ti * C + ch] = acc[ch] / float(end - start) + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types;
-            }
-    }
+		// perform filtering
+		for (int j = 0; j < w; j++, ri++, ti++, li++)
+			for (int ch = 0; ch < C; ++ch)
+			{
+				acc[ch] += ri < end ? in[ri * C + ch] : 0;
+				acc[ch] -= li >= begin ? in[li * C + ch] : 0;
+				const int begin_ = std::max(begin - 1, li);
+				const int end_ = std::min(end - 1, ri);
+				// renormalize kernel
+				out[ti * C + ch] = acc[ch] / float(end_ - begin_) + (std::is_integral_v<T> ? 0.5f : 0); // fixes darkening with integer types;
+			}
+	}
 }
 
 //! template<typename T, int C> 
@@ -174,14 +307,18 @@ void horizontal_blur_kernel_crop(const T* in, T* out, const int w, const int h, 
 template<typename T, int C, BorderPolicy P = kExtend>
 void horizontal_blur(const T* in, T* out, const int w, const int h, const int r)
 {
-    if constexpr (P == kExtend)
-    {
-        horizontal_blur_extend<T, C>(in, out, w, h, r);
-    }
-    else
-    {
-        horizontal_blur_kernel_crop<T, C>(in, out, w, h, r);
-    }
+	if constexpr (P == kExtend)
+	{
+		// horizontal_blur_extend<T,C>(in, out, w, h, r);   // generic version
+		if (r > w)
+			horizontal_blur_extend_large_kernel<T, C>(in, out, w, h, r); // large kernels version
+		else
+			horizontal_blur_extend_small_kernel<T, C>(in, out, w, h, r); // small kernels version
+	}
+	else
+	{
+		horizontal_blur_kernel_crop<T, C>(in, out, w, h, r);
+	}
 }
 
 //!
@@ -197,15 +334,15 @@ void horizontal_blur(const T* in, T* out, const int w, const int h, const int r)
 template<typename T>
 void horizontal_blur(const T* in, T* out, const int w, const int h, const int c, const int r)
 {
-    switch (c)
-    {
-    case 1: horizontal_blur<T, 1>(in, out, w, h, r); break;
-    case 2: horizontal_blur<T, 2>(in, out, w, h, r); break;
-    case 3: horizontal_blur<T, 3>(in, out, w, h, r); break;
-    case 4: horizontal_blur<T, 4>(in, out, w, h, r); break;
-    default: printf("horizontal_blur over %d channels is not supported yet. Add a specific case if possible or fall back to the generic version.\n", c); break;
-        // default: horizontal_blur<T>(in, out, w, h, c, r); break;
-    }
+	switch (c)
+	{
+	case 1: horizontal_blur<T, 1>(in, out, w, h, r); break;
+	case 2: horizontal_blur<T, 2>(in, out, w, h, r); break;
+	case 3: horizontal_blur<T, 3>(in, out, w, h, r); break;
+	case 4: horizontal_blur<T, 4>(in, out, w, h, r); break;
+	default: printf("horizontal_blur over %d channels is not supported yet. Add a specific case if possible or fall back to the generic version.\n", c); break;
+		// default: horizontal_blur<T>(in, out, w, h, c, r); break;
+	}
 }
 
 //!
@@ -223,29 +360,29 @@ void horizontal_blur(const T* in, T* out, const int w, const int h, const int c,
 template<typename T, int C>
 void flip_block(const T* in, T* out, const int w, const int h)
 {
-    constexpr int block = 256 / C;
+	constexpr int block = 256 / C;
 #pragma omp parallel for collapse(2)
-    for (int x = 0; x < w; x += block)
-        for (int y = 0; y < h; y += block)
-        {
-            const T* p = in + y * w * C + x * C;
-            T* q = out + y * C + x * h * C;
+	for (int x = 0; x < w; x += block)
+		for (int y = 0; y < h; y += block)
+		{
+			const T* p = in + y * w * C + x * C;
+			T* q = out + y * C + x * h * C;
 
-            const int blockx = std::min(w, x + block) - x;
-            const int blocky = std::min(h, y + block) - y;
-            for (int xx = 0; xx < blockx; xx++)
-            {
-                for (int yy = 0; yy < blocky; yy++)
-                {
-                    for (int k = 0; k < C; k++)
-                        q[k] = p[k];
-                    p += w * C;
-                    q += C;
-                }
-                p += -blocky * w * C + C;
-                q += -blocky * C + h * C;
-            }
-        }
+			const int blockx = std::min(w, x + block) - x;
+			const int blocky = std::min(h, y + block) - y; 
+			for (int xx = 0; xx < blockx; xx++)
+			{
+				for (int yy = 0; yy < blocky; yy++)
+				{
+					for (int k = 0; k < C; k++)
+						q[k] = p[k];
+					p += w * C;
+					q += C;
+				}
+				p += -blocky * w * C + C;
+				q += -blocky * C + h * C;
+			}
+		}
 }
 //!
 //! \brief Utility template dispatcher function for flip_block. Templated by buffer data type T.
@@ -259,15 +396,15 @@ void flip_block(const T* in, T* out, const int w, const int h)
 template<typename T>
 void flip_block(const T* in, T* out, const int w, const int h, const int c)
 {
-    switch (c)
-    {
-    case 1: flip_block<T, 1>(in, out, w, h); break;
-    case 2: flip_block<T, 2>(in, out, w, h); break;
-    case 3: flip_block<T, 3>(in, out, w, h); break;
-    case 4: flip_block<T, 4>(in, out, w, h); break;
-    default: printf("flip_block over %d channels is not supported yet. Add a specific case if possible or fall back to the generic version.\n", c); break;
-        // default: flip_block<T>(in, out, w, h, c); break;
-    }
+	switch (c)
+	{
+	case 1: flip_block<T, 1>(in, out, w, h); break;
+	case 2: flip_block<T, 2>(in, out, w, h); break;
+	case 3: flip_block<T, 3>(in, out, w, h); break;
+	case 4: flip_block<T, 4>(in, out, w, h); break;
+	default: printf("flip_block over %d channels is not supported yet. Add a specific case if possible or fall back to the generic version.\n", c); break;
+		// default: flip_block<T>(in, out, w, h, c); break;
+	}
 }
 
 //!
@@ -284,19 +421,19 @@ void flip_block(const T* in, T* out, const int w, const int h, const int c)
 //!
 float sigma_to_box_radius(int boxes[], const float sigma, const int n)
 {
-    // ideal filter width
-    float wi = std::sqrt((12 * sigma * sigma / n) + 1);
-    int wl = wi; // no need std::floor  
-    if (wl % 2 == 0) wl--;
-    int wu = wl + 2;
+	// ideal filter width
+	float wi = std::sqrt((12 * sigma * sigma / n) + 1);
+	int wl = wi; // no need std::floor  
+	if (wl % 2 == 0) wl--;
+	int wu = wl + 2;
 
-    float mi = (12 * sigma * sigma - n * wl * wl - 4 * n * wl - 3 * n) / (-4 * wl - 4);
-    int m = mi + 0.5f; // avoid std::round by adding 0.5f and cast to integer type
+	float mi = (12 * sigma * sigma - n * wl * wl - 4 * n * wl - 3 * n) / (-4 * wl - 4);
+	int m = mi + 0.5f; // avoid std::round by adding 0.5f and cast to integer type
 
-    for (int i = 0; i < n; i++)
-        boxes[i] = ((i < m ? wl : wu) - 1) / 2;
+	for (int i = 0; i < n; i++)
+		boxes[i] = ((i < m ? wl : wu) - 1) / 2;
 
-    return std::sqrt((m * wl * wl + (n - m) * wu * wu - n) / 12.f);
+	return std::sqrt((m * wl * wl + (n - m) * wu * wu - n) / 12.f);
 }
 
 //!
@@ -329,30 +466,30 @@ float sigma_to_box_radius(int boxes[], const float sigma, const int n)
 template<typename T, unsigned int N>
 void fast_gaussian_blur(T*& in, T*& out, const int w, const int h, const int c, const float sigma)
 {
-    // compute box kernel sizes
-    int boxes[N];
-    sigma_to_box_radius(boxes, sigma, N);
+	// compute box kernel sizes
+	int boxes[N];
+	sigma_to_box_radius(boxes, sigma, N);
 
-    // perform N horizontal blur passes
-    for (int i = 0; i < N; ++i)
-    {
-        horizontal_blur(in, out, w, h, c, boxes[i]);
-        std::swap(in, out);
-    }
+	// perform N horizontal blur passes
+	for (int i = 0; i < N; ++i)
+	{
+		horizontal_blur(in, out, w, h, c, boxes[i]);
+		std::swap(in, out);
+	}
 
-    // flip buffer
-    flip_block(in, out, w, h, c);
-    std::swap(in, out);
+	// flip buffer
+	flip_block(in, out, w, h, c);
+	std::swap(in, out);
 
-    // perform N horizontal blur passes on flipped image
-    for (int i = 0; i < N; ++i)
-    {
-        horizontal_blur(in, out, h, w, c, boxes[i]);
-        std::swap(in, out);
-    }
+	// perform N horizontal blur passes on flipped image
+	for (int i = 0; i < N; ++i)
+	{
+		horizontal_blur(in, out, h, w, c, boxes[i]);
+		std::swap(in, out);
+	}
 
-    // flip buffer
-    flip_block(in, out, h, w, c);
+	// flip buffer
+	flip_block(in, out, h, w, c);
 }
 
 
@@ -386,28 +523,28 @@ void fast_gaussian_blur(T*& in, T*& out, const int w, const int h, const int c, 
 template<typename T>
 void fast_gaussian_blur(T*& in, T*& out, const int w, const int h, const int c, const float sigma)
 {
-    // compute box kernel sizes
-    int boxes[3];
-    sigma_to_box_radius(boxes, sigma, 3);
+	// compute box kernel sizes
+	int boxes[3];
+	sigma_to_box_radius(boxes, sigma, 3);
 
-    // perform 3 horizontal blur passes
-    horizontal_blur(in, out, w, h, c, boxes[0]);
-    horizontal_blur(out, in, w, h, c, boxes[1]);
-    horizontal_blur(in, out, w, h, c, boxes[2]);
+	// perform 3 horizontal blur passes
+	horizontal_blur(in, out, w, h, c, boxes[0]);
+	horizontal_blur(out, in, w, h, c, boxes[1]);
+	horizontal_blur(in, out, w, h, c, boxes[2]);
 
-    // flip buffer
-    flip_block(out, in, w, h, c);
+	// flip buffer
+	flip_block(out, in, w, h, c);
 
-    // perform 3 horizontal blur passes on flipped image
-    horizontal_blur(in, out, h, w, c, boxes[0]);
-    horizontal_blur(out, in, h, w, c, boxes[1]);
-    horizontal_blur(in, out, h, w, c, boxes[2]);
+	// perform 3 horizontal blur passes on flipped image
+	horizontal_blur(in, out, h, w, c, boxes[0]);
+	horizontal_blur(out, in, h, w, c, boxes[1]);
+	horizontal_blur(in, out, h, w, c, boxes[2]);
 
-    // flip buffer
-    flip_block(out, in, h, w, c);
+	// flip buffer
+	flip_block(out, in, h, w, c);
 
-    // swap pointers to get result in the ouput buffer 
-    std::swap(in, out);
+	// swap pointers to get result in the ouput buffer 
+	std::swap(in, out);
 }
 
 //!
@@ -428,19 +565,19 @@ void fast_gaussian_blur(T*& in, T*& out, const int w, const int h, const int c, 
 template<typename T>
 void fast_gaussian_blur(T*& in, T*& out, const int w, const int h, const int c, const float sigma, const unsigned int n)
 {
-    switch (n)
-    {
-    case 1: fast_gaussian_blur<T, 1>(in, out, w, h, c, sigma); break;
-    case 2: fast_gaussian_blur<T, 2>(in, out, w, h, c, sigma); break;
-    case 3: fast_gaussian_blur<T>(in, out, w, h, c, sigma); break;      // specialized 3 passes version
-    case 4: fast_gaussian_blur<T, 4>(in, out, w, h, c, sigma); break;
-    case 5: fast_gaussian_blur<T, 5>(in, out, w, h, c, sigma); break;
-    case 6: fast_gaussian_blur<T, 6>(in, out, w, h, c, sigma); break;
-    case 7: fast_gaussian_blur<T, 7>(in, out, w, h, c, sigma); break;
-    case 8: fast_gaussian_blur<T, 8>(in, out, w, h, c, sigma); break;
-    case 9: fast_gaussian_blur<T, 9>(in, out, w, h, c, sigma); break;
-    case 10: fast_gaussian_blur<T, 10>(in, out, w, h, c, sigma); break;
-    default: printf("fast_gaussian_blur with %d passes is not supported yet. Add a specific case if possible or fall back to the generic version.\n", n); break;
-        // default: fast_gaussian_blur<T,10>(in, out, w, h, c, sigma, n); break;
-    }
+	switch (n)
+	{
+	case 1: fast_gaussian_blur<T, 1>(in, out, w, h, c, sigma); break;
+	case 2: fast_gaussian_blur<T, 2>(in, out, w, h, c, sigma); break;
+	case 3: fast_gaussian_blur<T>(in, out, w, h, c, sigma); break;      // specialized 3 passes version
+	case 4: fast_gaussian_blur<T, 4>(in, out, w, h, c, sigma); break;
+	case 5: fast_gaussian_blur<T, 5>(in, out, w, h, c, sigma); break;
+	case 6: fast_gaussian_blur<T, 6>(in, out, w, h, c, sigma); break;
+	case 7: fast_gaussian_blur<T, 7>(in, out, w, h, c, sigma); break;
+	case 8: fast_gaussian_blur<T, 8>(in, out, w, h, c, sigma); break;
+	case 9: fast_gaussian_blur<T, 9>(in, out, w, h, c, sigma); break;
+	case 10: fast_gaussian_blur<T, 10>(in, out, w, h, c, sigma); break;
+	default: printf("fast_gaussian_blur with %d passes is not supported yet. Add a specific case if possible or fall back to the generic version.\n", n); break;
+		// default: fast_gaussian_blur<T,10>(in, out, w, h, c, sigma, n); break;
+	}
 }

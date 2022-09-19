@@ -49,8 +49,8 @@ int gaussian_window(const double sigma, const int max_width = 0) {
 
 	return width;
 }
-
-void getGaussian(std::vector<float>& kernel, const double sigma, int width = 0, int FFT_length = 0)
+template<typename T>
+void getGaussian(T& kernel, const double sigma, int width = 0, int FFT_length = 0)
 {
 
 	if (!width) width = gaussian_window(sigma);
@@ -302,7 +302,7 @@ void pocketfft_(cv::Mat image, int nsmooth)
 
 	image.convertTo(image, CV_8UC3);
 	cv::Rect myroi(border[2], border[0], sizes[1] - border[2] - border[3], sizes[0] - border[0] - border[1]);
-	cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
+	cv::imwrite("C:/Users/miki/Downloads/c_.png", image(myroi));
 
 }
 
@@ -406,141 +406,122 @@ void pocketfft_1D(cv::Mat image, double nsmooth)
 
 	image.convertTo(image, CV_8UC3);
 	cv::Rect myroi(border[2], border[0], sizes[1] - border[2] - border[3], sizes[0] - border[0] - border[1]);
-	cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
+	cv::imwrite("C:/Users/miki/Downloads/c_.png", image(myroi));
 
 }
 
 
-void pffft_(cv::Mat image, int nsmooth, bool fast = true)
+void pffft_(cv::Mat image, int nsmooth)
 {
 
 	image.convertTo(image, CV_32FC3);
-	int passes = 2; //we are using a kernel convolved with itself, is like running two passes of the original kernel
-	int pad = (nsmooth * nsmooth - 1) / 2 * passes;
-	//top - bottom - left - right margin
-	int border[4] = { pad, pad, pad, pad };
+	double sigma = nsmooth;
+	//calculate a good width of the kernel for our sigma
+	int kSize = gaussian_window(sigma, std::max(image.size[0], image.size[1]));
+
+	int passes = 1; //we are using 1 pass for the gaussian kernel
+	int pad = (kSize - 1) / 2 * passes;
 
 	//absolute min padd
-	size_t sizes[2] = { image.size[0] + border[0] + border[1], image.size[1] + border[2] + border[3] };
+	size_t sizes[2] = { image.size[0] + pad * 2, image.size[1] + pad * 2 };
 
-	//if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
+	//if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad as trailing zeros
+	int trailing_zeros[2] = {};
+
 	for (int i = 0; i < 2; ++i) {
 		if (!pffft::Fft<float>::isValidSize(sizes[i]))
 		{
-			//printf("pre %d %d %d %d %d %d %d\n", sizes[0], sizes[1], border[0], border[1], border[2], border[3], pffft::Fft<float>::isValidSize(sizes[i]));
 			int new_size = pffft::Fft<float>::nearestTransformSize(sizes[i]);
-			int new_pad = (new_size - sizes[i]);
+			trailing_zeros[i] = (new_size - sizes[i]);
 			sizes[i] = new_size;
-			border[i * 2 + 0] += new_pad / 2; //floor - fix for new_pad when not even
-			border[i * 2 + 1] += new_pad / 2.f + 0.5f; //ceil if odd - fix for new_pad when not even
-			//printf("post %d %d %d %d %d %d %d\n", sizes[0], sizes[1], border[0], border[1], border[2], border[3], pffft::Fft<float>::isValidSize(sizes[i]));
 		}
 	}
-	cv::copyMakeBorder(image, image, border[0], border[1], border[2], border[3], CV_HAL_BORDER_REFLECT);
 
 	cv::Mat temp[3];
 	cv::split(image, temp);
 
 	start_0 = std::chrono::steady_clock::now();
 
-	pffft::AlignedVector<float> kerf_1D_row;
-	pffft::AlignedVector<float> kerf_1D_col;
-	pffft::AlignedVector<std::complex<float>> kerf_complex;
 	//fast convolve by pffft, without reordering the z-domain. Thus, we perform a row by row, col by col FFT and convolution with 2x1D kernel
-	if (fast) {
-		pffft::Fft<float> fft_kernel_1D_row(sizes[1]);
-		pffft::AlignedVector<float> kernel_aligned_1D_row = pffft::AlignedVector<float>(fft_kernel_1D_row.getLength());
 
-		make_kernel_1D(kernel_aligned_1D_row.data(), nsmooth * nsmooth, sizes[1]);
+	pffft::AlignedVector<float> kerf_1D_row;
+	pffft::AlignedVector<float> kerf_1D_col; 
 
-		kerf_1D_row = fft_kernel_1D_row.internalLayoutVector();
-		fft_kernel_1D_row.forwardToInternalLayout(kernel_aligned_1D_row, kerf_1D_row);
+	pffft::Fft<float> fft_kernel_1D_row(sizes[1]);
+	pffft::AlignedVector<float> kernel_aligned_1D_row = pffft::AlignedVector<float>(fft_kernel_1D_row.getLength());
+	 
+	//create a gaussian 1D kernel with the specified sigma and kernel size, and center it in a length of FFT_length
+	getGaussian(kernel_aligned_1D_row, sigma, kSize, sizes[1]);
 
-		//calculate the DFT of kernel by col if size of cols is not the same of rows
-		if (sizes[0] != sizes[1]) {
-			pffft::Fft<float> fft_kernel_1D_col(sizes[0]);
-			pffft::AlignedVector<float> kernel_aligned_1D_col = pffft::AlignedVector<float>(fft_kernel_1D_col.getLength());
+	kerf_1D_row = fft_kernel_1D_row.internalLayoutVector();
+	fft_kernel_1D_row.forwardToInternalLayout(kernel_aligned_1D_row, kerf_1D_row);
 
-			make_kernel_1D(kernel_aligned_1D_col.data(), nsmooth * nsmooth, sizes[0]);
+	//calculate the DFT of kernel by col if size of cols is not the same of rows
+	if (sizes[0] != sizes[1]) {
+		pffft::Fft<float> fft_kernel_1D_col(sizes[0]);
+		pffft::AlignedVector<float> kernel_aligned_1D_col = pffft::AlignedVector<float>(fft_kernel_1D_col.getLength());
+		 
+		getGaussian(kernel_aligned_1D_col, sigma, kSize, sizes[0]);
 
-			kerf_1D_col = fft_kernel_1D_col.internalLayoutVector();
-			fft_kernel_1D_col.forwardToInternalLayout(kernel_aligned_1D_col, kerf_1D_col);
-
-		}
-		else {
-			kerf_1D_col = kerf_1D_row;
-		}
+		kerf_1D_col = fft_kernel_1D_col.internalLayoutVector();
+		fft_kernel_1D_col.forwardToInternalLayout(kernel_aligned_1D_col, kerf_1D_col);
 
 	}
 	else {
-		//2D DFT if not fast convolution requested
-		pffft::Fft<float> fft_kernel(sizes[0] * sizes[1]);
-		pffft::AlignedVector<float> kernel_aligned = pffft::AlignedVector<float>(fft_kernel.getLength());
-		make_kernel(kernel_aligned.data(), nsmooth * nsmooth, sizes);
-		kerf_complex = fft_kernel.spectrumVector();
-		fft_kernel.forward(kernel_aligned, kerf_complex);
+		kerf_1D_col = kerf_1D_row;
 	}
 
-	int ndata = sizes[0] * sizes[1];
-	std::vector<pffft::AlignedVector<float>> resf;
-	if (!fast)
-		for (int i = 0; i < 3; ++i)
-			resf.push_back(pffft::AlignedVector<float>(ndata) /* same as fft_kernel.valueVector() */);
+	int ndata = image.size[0] * image.size[1];
 
 #pragma omp parallel for
 	for (int i = 0; i < 3; ++i) {
 		//if fast don't do z-domain reordering, so it's faster than the normal process, is written in their APIs
-		if (fast) {
-			pffft::AlignedVector<float> resf(ndata);
 
-			pffft::Fft<float> fft_rows(sizes[1]);
-			pffft::AlignedVector<float> tile(sizes[1]);
-			pffft::AlignedVector<float> work = fft_rows.internalLayoutVector();
-			for (int j = 0; j < sizes[0]; ++j) {
+		pffft::AlignedVector<float> resf(ndata);
 
-				std::copy_n(&((float*)temp[i].data)[j * sizes[1]], sizes[1], tile.begin());
+		pffft::Fft<float> fft_rows(sizes[1]);
+		pffft::AlignedVector<float> tile(sizes[1]);
+		pffft::AlignedVector<float> work = fft_rows.internalLayoutVector();
 
-				fft_rows.forwardToInternalLayout(tile, work);
-				fft_rows.convolve(work, kerf_1D_row, work, 1.f / sizes[1]);
-				fft_rows.inverseFromInternalLayout(work, tile);
-				//std::transform(tile.begin(), tile.end(), tile.begin(), [&sizes](auto i) {return i * (1.f / sizes[1]); });
+		for (int j = 0; j < image.size[0]; ++j) {
 
-				//save the 1st pass row by row in the output vector
-				std::copy(tile.begin(), tile.end(), resf.begin() + j * sizes[1]);
-			}
+			//copy the row and pad by reflection in the aligned vector
+			//left reflected pad
+			std::copy_n(std::reverse_iterator(&((float*)temp[i].data)[(j + 1) * image.size[1]]) + image.size[1] - pad - 1, pad, tile.begin());
+			//middle
+			std::copy_n(&((float*)temp[i].data)[j * image.size[1]], image.size[1], tile.begin() + pad);
+			//right reflected pad
+			std::copy_n(std::reverse_iterator(&((float*)temp[i].data)[(j + 1) * image.size[1]]) + 1, pad, tile.end() - pad /* fft trailing 0s --> */ - trailing_zeros[1]);
 
-			//transpose cache-friendly, took from FastBoxBlur
-			flip_block<float, 1>((float*)resf.data(), ((float*)temp[i].data), (int)sizes[1], (int)sizes[0]);
+			fft_rows.forwardToInternalLayout(tile, work);
+			fft_rows.convolve(work, kerf_1D_row, work, 1.f / sizes[1]);
+			fft_rows.inverseFromInternalLayout(work, tile); 
 
-			pffft::Fft<float> fft_cols(sizes[0]);
-			tile.resize(sizes[0]);
-			work = fft_cols.internalLayoutVector();
-			for (int j = 0; j < sizes[1]; ++j) {
-
-				std::copy_n(&((float*)temp[i].data)[j * sizes[0]], sizes[0], tile.begin());
-
-				fft_cols.forwardToInternalLayout(tile, work);
-				fft_cols.convolve(work, kerf_1D_col, work, 1.f / sizes[0]);
-				fft_cols.inverseFromInternalLayout(work, tile);
-				//std::transform(tile.begin(), tile.end(), tile.begin(), [&sizes](auto i) {return i * (1.f / sizes[0]); });
-
-				//save the 2nd pass col by col in the output vector
-				std::copy(tile.begin(), tile.end(), resf.begin() + j * sizes[0]);
-
-			}
-			flip_block<float, 1>((float*)resf.data(), ((float*)temp[i].data), (int)sizes[0], (int)sizes[1]);
+			//save the 1st pass row by row in the output vector
+			std::copy(tile.begin() + pad, tile.end() - pad - trailing_zeros[1], resf.begin() + j * image.size[1]);
 		}
-		else {
-			// convolve 2D(flattened) kernel with 2D(flattened) image in the frequency domain
-			std::copy_n(&((float*)temp[i].data)[0], ndata, resf[i].begin());
-			pffft::Fft<float> fft(ndata);
-			pffft::AlignedVector<std::complex<float>> work = fft.spectrumVector();
-			fft.forward(resf[i], work);
-			transform(begin(kerf_complex), end(kerf_complex), begin(work), begin(work), [&ndata](auto& n, auto& m) { return n * m * (1.f / ndata); });
-			fft.inverse(work, resf[i]);
-			work.clear();
-			temp[i] = cv::Mat(sizes[0], sizes[1], CV_32F, resf[i].data());
+
+		//transpose cache-friendly, took from FastBoxBlur
+		flip_block<float, 1>((float*)resf.data(), ((float*)temp[i].data), image.size[1], image.size[0]);
+
+		pffft::Fft<float> fft_cols(sizes[0]);
+		tile.resize(sizes[0]);
+		work = fft_cols.internalLayoutVector();
+		for (int j = 0; j < image.size[1]; ++j) {
+			 
+			std::copy_n(std::reverse_iterator(&((float*)temp[i].data)[(j + 1) * image.size[0]]) + image.size[0] - pad - 1, pad, tile.begin());
+			std::copy_n(&((float*)temp[i].data)[j * image.size[0]], image.size[0], tile.begin() + pad);
+			std::copy_n(std::reverse_iterator(&((float*)temp[i].data)[(j + 1) * image.size[0]]) + 1, pad, tile.end() - pad /* fft trailing 0s --> */ - trailing_zeros[0]);
+
+			fft_cols.forwardToInternalLayout(tile, work);
+			fft_cols.convolve(work, kerf_1D_col, work, 1.f / sizes[0]);
+			fft_cols.inverseFromInternalLayout(work, tile); 
+
+			//save the 2nd pass col by col in the output vector 
+			std::copy(tile.begin() + pad, tile.end() - pad - trailing_zeros[0], resf.begin() + j * image.size[0]);
+
 		}
+		flip_block<float, 1>((float*)resf.data(), ((float*)temp[i].data), image.size[0], image.size[1]);
 
 	}
 
@@ -548,8 +529,7 @@ void pffft_(cv::Mat image, int nsmooth, bool fast = true)
 	cv::merge(temp, 3, image);
 
 	image.convertTo(image, CV_8UC3);
-	cv::Rect myroi(border[2], border[0], sizes[1] - border[2] - border[3], sizes[0] - border[0] - border[1]);
-	cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
+	cv::imwrite("C:/Users/miki/Downloads/c_.png", image);
 }
 
 void NewBlur(cv::Mat monoimage, int nsmooth)
@@ -609,10 +589,7 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 	if (flag == 5) pocketfft_1D(image, nsmooth);
 	else if (flag == 4) {
 
-		//add extra pad by reflection to keep edges details
-		int border[2] = { (nsmooth * nsmooth - 1), (nsmooth * nsmooth - 1) };
-		size_t sizes[2] = { image.size[0] + border[0] * 2, image.size[1] + border[1] * 2 };
-		cv::copyMakeBorder(image, image, border[0], border[0], border[1], border[1], CV_HAL_BORDER_REFLECT);
+		size_t sizes[2] = { image.size[0], image.size[1]};
 
 		std::chrono::time_point<std::chrono::steady_clock> start_5 = std::chrono::steady_clock::now();
 		//prepare temp vector
@@ -622,7 +599,7 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 		//smooth row by row, transpose, col by col and transpose back. smooth twice, as suggested 2 passes
 		int passes = 2;
 		for (int i = 0; i < passes; ++i) {
-			horizontal_blur_extend<uchar, 3>(image.data, image_out_ptr, sizes[1], sizes[0], nsmooth * nsmooth);
+			horizontal_blur_kernel_reflect<uchar, 3>(image.data, image_out_ptr, sizes[1], sizes[0], nsmooth * nsmooth);
 			std::swap(image.data, image_out_ptr);
 		}
 
@@ -631,7 +608,7 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 		std::chrono::time_point<std::chrono::steady_clock> start_2 = std::chrono::steady_clock::now();
 
 		for (int i = 0; i < passes; ++i) {
-			horizontal_blur_extend<uchar, 3>(image_out_ptr, image.data, sizes[0], sizes[1], nsmooth * nsmooth);
+			horizontal_blur_kernel_reflect<uchar, 3>(image_out_ptr, image.data, sizes[0], sizes[1], nsmooth * nsmooth);
 			std::swap(image.data, image_out_ptr);
 		}
 
@@ -639,18 +616,17 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 		flip_block<uchar, 3>(image_out_ptr, image.data, image.size[0], image.size[1]);
 		std::chrono::time_point<std::chrono::steady_clock> start_4 = std::chrono::steady_clock::now();
 
-		//printf("1st transp : %f\n", std::chrono::duration<double, std::milli>(start_2 - start_1).count());
-		//printf("2nd transp : %f\n", std::chrono::duration<double, std::milli>(start_4 - start_3).count());
+		printf("1st transp : %f\n", std::chrono::duration<double, std::milli>(start_2 - start_1).count());
+		printf("2nd transp : %f\n", std::chrono::duration<double, std::milli>(start_4 - start_3).count());
 		printf("(horizontalblur only, tot - transp) : %f\n", std::chrono::duration<double, std::milli>(start_4 - start_5).count() - std::chrono::duration<double, std::milli>(start_2 - start_1).count() - std::chrono::duration<double, std::milli>(start_4 - start_3).count());
-		//printf("fastblur only: %f\n", std::chrono::duration<double, std::milli>(start_4 - start_5).count());
-		//printf("fastblur with padding: %f\n", std::chrono::duration<double, std::milli>(start_4 - start_0).count());
+		printf("fastblur only: %f\n", std::chrono::duration<double, std::milli>(start_4 - start_5).count());
+		printf("fastblur with padding: %f\n", std::chrono::duration<double, std::milli>(start_4 - start_0).count());
 
-		//save image cropped
-		cv::Rect myroi(border[1], border[0], sizes[1] - border[1] * 2, sizes[0] - border[0] * 2);
-		cv::imwrite("C:/Users/Michele/Downloads/c_.png", image(myroi));
+		//save image
+		cv::imwrite("C:/Users/miki/Downloads/c_.png", image);
 
 	}
-	else if (flag == 3) pffft_(image, nsmooth, fast_);
+	else if (flag == 3) pffft_(image, nsmooth);
 	else if (flag == 2) pocketfft_(image, nsmooth);
 	else if (flag == 1)
 	{
@@ -662,19 +638,19 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 		NewBlur(temp[2], nsmooth);
 		printf("NewBlur: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 		cv::merge(temp, 3, image);
-		cv::imwrite("C:/Users/Michele/Downloads/c_.png", image);
+		cv::imwrite("C:/Users/miki/Downloads/c_.png", image);
 	}
 	else
 	{
 
-		//nsmooth *= nsmooth;
+		nsmooth *= nsmooth;
 
-		//cv::blur(image, image, cv::Size(nsmooth, nsmooth));
-		//cv::blur(image, image, cv::Size(nsmooth, nsmooth));
-		cv::GaussianBlur(image, image, cv::Size(0, 0), nsmooth);
+		cv::blur(image, image, cv::Size(nsmooth, nsmooth));
+		cv::blur(image, image, cv::Size(nsmooth, nsmooth));
+		//cv::GaussianBlur(image, image, cv::Size(0, 0), nsmooth);
 		printf("OpenCV blur: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 
-		cv::imwrite("C:/Users/Michele/Downloads/c_.png", image);
+		cv::imwrite("C:/Users/miki/Downloads/c_.png", image);
 	}
 }
 
