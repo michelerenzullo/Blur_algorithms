@@ -1,37 +1,16 @@
-#include <complex>
-#include <cmath>
-#include <vector>
-#include <stdio.h>
-#include <conio.h>
-#include <ppl.h>
-#include <execution>
+#include <numeric>
 #include <iostream> 
 #include <pffft.hpp>
 //suppose a max size of 4080px, using a kernel 11*11 and extra padd for FFT, using cache will make faster pocketfft
 #define POCKETFFT_CACHE_SIZE 4500
 #include "pocketfft_hdronly.h"
-#include "fast_gaussian_blur_template.h"
-#define _CRTDBG_MAP_ALLOC
-#include <cstdlib>
-#include <crtdbg.h>
-
-#define DBG_NEW new ( _NORMAL_BLOCK , __FILE__ , __LINE__ )
-// Replace _NORMAL_BLOCK with _CLIENT_BLOCK if you want the
-// allocations to be of _CLIENT_BLOCK type
+#include "fast_box_blur.h"
 
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/photo/photo.hpp>
-#include "Recolour.h"
-
-#define SIZE 512
 
 std::chrono::time_point<std::chrono::steady_clock> start_0;
 
-void AddPadding(float(*block)[SIZE * 2], int rows, int ncols, int nreflects);
-void conv2(uint8_t(*target)[SIZE], float* kernel, int rt, int ct, int rk, int ck);
-void convolution(std::complex<float>(*target)[SIZE * 2], std::complex<float>(*kernel)[SIZE * 2]);
-void FFT2D(std::complex<float>(*array)[SIZE * 2], int nrows, int ncols, int sign);
-inline void FFT(std::complex<float>* Fdata, int n, int sign);
 
 #define M_PI		3.14159265358979323846
 
@@ -66,6 +45,7 @@ void getGaussian(T& kernel, const double sigma, int width = 0, int FFT_length = 
 		kernel[i] = (exp(-(y * y) / s)) / (M_PI * s);
 
 	const double sum = 1. / std::accumulate(&kernel[0], &kernel[width], 0.);
+
 	for (int i = 0; i < width; ++i) kernel[i] *= sum;
 	printf("\nsum %f\n", std::accumulate(&kernel[0], &kernel[width], 0.));
 
@@ -75,41 +55,6 @@ void getGaussian(T& kernel, const double sigma, int width = 0, int FFT_length = 
 }
 
 
-void generate_table(uint32_t* crc_table)
-{
-	uint32_t r;
-	for (int i = 0; i < 256; i++)
-	{
-		r = i;
-		for (int j = 0; j < 8; j++)
-		{
-			if (r & 1)
-			{
-				r >>= 1;
-				r ^= 0xEDB88320;
-			}
-			else
-			{
-				r >>= 1;
-			}
-		}
-		crc_table[i] = r;
-	}
-}
-
-uint32_t crc32c(uint8_t* data, size_t bytes)
-{
-	uint32_t* crc_table = new uint32_t[256];
-	generate_table(crc_table);
-	uint32_t crc = 0xFFFFFFFF;
-	while (bytes--)
-	{
-		int i = (crc ^ *data++) & 0xFF;
-		crc = (crc_table[i] ^ (crc >> 8));
-	}
-	delete[] crc_table;
-	return crc ^ 0xFFFFFFFF;
-}
 
 void make_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
 {
@@ -123,7 +68,7 @@ void make_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
 	}
 	double rank = 0.;
 	for (int i = 0; i < iFTsize; ++i) rank += kernel[i];
-	printf("rank %.3f - crc32: %02X\n", rank, crc32c((uint8_t*)kernel, iFTsize * sizeof(float)));
+	printf("rank %.3f\n", rank);
 }
 
 int isValidSize(int N) {
@@ -157,36 +102,9 @@ void make_kernel(float* kernel, int kLen, const size_t iFTsize[])
 			kernel[rval * iFTsize[1] + cval] += kval * scale;
 		}
 	}
-	printf("crc32: %02X\n", crc32c((uint8_t*)kernel, iFTsize[0] * iFTsize[1] * sizeof(float)));
-}
-/*
-template<typename T, int C> void flip_block(const T* in, T* out, const int w, const int h)
-{
-	constexpr int block = 256 / C;
-#pragma omp parallel for collapse(2)
-	for (int x = 0; x < w; x += block)
-		for (int y = 0; y < h; y += block)
-		{
-			const T* p = in + y * w * C + x * C;
-			T* q = out + y * C + x * h * C;
 
-			const int blockx = std::min(w, x + block) - x;
-			const int blocky = std::min(h, y + block) - y;
-			for (int xx = 0; xx < blockx; xx++)
-			{
-				for (int yy = 0; yy < blocky; yy++)
-				{
-					for (int k = 0; k < C; k++)
-						q[k] = p[k];
-					p += w * C;
-					q += C;
-				}
-				p += -blocky * w * C + C;
-				q += -blocky * C + h * C;
-			}
-		}
 }
-*/
+
 
 void pocketfft_2D(cv::Mat image, int nsmooth)
 {
@@ -538,62 +456,15 @@ void pffft_(cv::Mat image, int nsmooth)
 	cv::imwrite("C:/Users/miki/Downloads/c_.png", image);
 }
 
-void NewBlur(cv::Mat monoimage, int nsmooth)
-{
-	auto kernel = new float[SIZE * SIZE * 4];
 
-	int rk = 2 * nsmooth * nsmooth - 1;
-	int ck = 2 * nsmooth * nsmooth - 1;
-
-	const size_t sizes[2] = { SIZE * 2, SIZE * 2 };
-	make_kernel(kernel, nsmooth * nsmooth, sizes);
-
-	/*
-	for (int irows = 0; irows < rk; irows++)
-	{
-		for (int icols = 0; icols < ck; icols++)
-		{
-			kernel[irows][icols] = 1.f / (rk * ck);
-		}
-	}*/
-
-
-	auto target = new uint8_t[SIZE][SIZE];
-
-	for (int irow = 0; irow < SIZE; irow++)
-	{
-		for (int icol = 0; icol < SIZE; icol++)
-		{
-			target[irow][icol] = monoimage.at<uint8_t>(irow, icol);
-		}
-	}
-
-	//SaveImage(monoimage, "Mono in", 1, 0, 0);
-
-	// The inputs have been set up. Now do
-	// the convolution and display the output.
-	conv2(target, kernel, SIZE, SIZE, rk, ck);
-
-	for (int irow = 0; irow < SIZE; irow++)
-	{
-		for (int icol = 0; icol < SIZE; icol++)
-		{
-			monoimage.at<uint8_t>(irow, icol) = target[irow][icol];
-		}
-	}
-	//SaveImage(monoimage, "Mono out", 0, 1, 0);
-	delete[] target;
-	delete[] kernel;
-
-}
 
 void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 {
 
 	start_0 = std::chrono::steady_clock::now();
 
-	if (flag == 5) pocketfft_1D(image, nsmooth);
-	else if (flag == 4) {
+	if (flag == 6) pocketfft_1D(image, nsmooth);
+	else if (flag == 5) {
 
 		size_t sizes[2] = { image.size[0], image.size[1] };
 
@@ -602,6 +473,44 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 		std::vector<uchar> image_out(sizes[1] * sizes[0] * 3);
 		uchar* image_out_ptr = image_out.data();
 
+		horizontal_blur_kernel_reflect_double<uchar, 3>(image.data, image_out_ptr, sizes[1], sizes[0], nsmooth * nsmooth);
+
+
+		std::chrono::time_point<std::chrono::steady_clock> start_1 = std::chrono::steady_clock::now();
+		flip_block<uchar, 3>(image_out_ptr, image.data, image.size[1], image.size[0]);
+		std::chrono::time_point<std::chrono::steady_clock> start_2 = std::chrono::steady_clock::now();
+
+
+		horizontal_blur_kernel_reflect_double<uchar, 3>(image.data, image_out_ptr, sizes[0], sizes[1], nsmooth * nsmooth);
+
+
+		std::chrono::time_point<std::chrono::steady_clock> start_3 = std::chrono::steady_clock::now();
+		flip_block<uchar, 3>(image_out_ptr, image.data, image.size[0], image.size[1]);
+		std::chrono::time_point<std::chrono::steady_clock> start_4 = std::chrono::steady_clock::now();
+
+		printf("1st transp : %f\n", std::chrono::duration<double, std::milli>(start_2 - start_1).count());
+		printf("2nd transp : %f\n", std::chrono::duration<double, std::milli>(start_4 - start_3).count());
+		printf("(double accumulation, horizontalblur only, tot - transp) : %f\n", std::chrono::duration<double, std::milli>(start_4 - start_5).count() - std::chrono::duration<double, std::milli>(start_2 - start_1).count() - std::chrono::duration<double, std::milli>(start_4 - start_3).count());
+		printf("fastblur only: %f\n", std::chrono::duration<double, std::milli>(start_4 - start_5).count());
+		printf("fastblur with padding: %f\n", std::chrono::duration<double, std::milli>(start_4 - start_0).count());
+
+		//save image
+		cv::imwrite("C:/Users/miki/Downloads/c_.png", image);
+
+	}
+	else if (flag == 4) {
+
+		size_t sizes[2] = { image.size[0], image.size[1] };
+
+		std::chrono::time_point<std::chrono::steady_clock> start_5 = std::chrono::steady_clock::now();
+		//prepare temp vector
+		std::vector<uchar> image_out(sizes[1] * sizes[0] * image.channels());
+		
+		uchar* in = image.data;
+		//uchar* out = image_out.data();
+		fastboxblur(in, sizes[1], sizes[0], image.channels(), nsmooth * nsmooth, 2);
+		/*
+		uchar* image_out_ptr = image_out.data();
 		//smooth row by row, transpose, col by col and transpose back. smooth twice, as suggested 2 passes
 		int passes = 2;
 		for (int i = 0; i < passes; ++i) {
@@ -627,28 +536,16 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 		printf("(horizontalblur only, tot - transp) : %f\n", std::chrono::duration<double, std::milli>(start_4 - start_5).count() - std::chrono::duration<double, std::milli>(start_2 - start_1).count() - std::chrono::duration<double, std::milli>(start_4 - start_3).count());
 		printf("fastblur only: %f\n", std::chrono::duration<double, std::milli>(start_4 - start_5).count());
 		printf("fastblur with padding: %f\n", std::chrono::duration<double, std::milli>(start_4 - start_0).count());
+		*/
 
-		//save image
+		printf("fastboxblur: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 		cv::imwrite("C:/Users/miki/Downloads/c_.png", image);
 
 	}
 	else if (flag == 3) pffft_(image, nsmooth);
 	else if (flag == 2) pocketfft_2D(image, nsmooth);
-	else if (flag == 1)
-	{
-		cv::Mat temp[3];
-		cv::split(image, temp);
-		start_0 = std::chrono::steady_clock::now();
-		NewBlur(temp[0], nsmooth);
-		NewBlur(temp[1], nsmooth);
-		NewBlur(temp[2], nsmooth);
-		printf("NewBlur: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
-		cv::merge(temp, 3, image);
-		cv::imwrite("C:/Users/miki/Downloads/c_.png", image);
-	}
 	else
 	{
-
 		nsmooth *= nsmooth;
 
 		cv::blur(image, image, cv::Size(nsmooth, nsmooth));
@@ -659,200 +556,6 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 		cv::imwrite("C:/Users/miki/Downloads/c_.png", image);
 	}
 }
-
-void conv2(uint8_t(*target)[SIZE], float* kArray, int rt, int ct, int rk, int ck)
-{
-	const int d = SIZE * 2;
-	auto tArray = new float[d][d]();
-	auto tComplex = new std::complex<float>[d][d];
-	auto kComplex = new std::complex<float>[d][d];
-
-	// Write the input data into centre of an array.
-	int rOffset = (d / 2 + 1) - int(rt / 2);
-	int cOffset = (d / 2 + 1) - int(ct / 2);
-
-	for (int irow = 0; irow < rt; irow++)
-		for (int icol = 0; icol < ct; icol++)
-			tArray[irow + rOffset][icol + cOffset] = (float)target[irow][icol];
-
-	// Bulk out by reflection at edges.
-	//
-	AddPadding(tArray, rt, ct, cv::max(rk / 2, ck / 2));
-
-	// Represent arrays as complex variables
-	for (int irow = 0; irow < d; irow++)
-	{
-		for (int icol = 0; icol < d; icol++)
-		{
-			tComplex[irow][icol] = std::complex<float>(tArray[irow][icol], 0.0);
-			kComplex[irow][icol] = std::complex<float>(kArray[irow * SIZE * 2 + icol], 0.0);
-		}
-	}
-
-	// Convolve arrays
-	convolution(tComplex, kComplex);
-
-	// Return convolved data as output.
-	for (int irow = 0; irow < SIZE; irow++)
-	{
-		for (int icol = 0, ri = irow + rOffset; icol < SIZE; icol++)
-		{
-			int ci = icol + cOffset;
-			target[irow][icol] = (uint8_t)std::real(tComplex[ri][ci]) + 0.01;
-		}
-
-	}
-	delete[] kComplex;
-	delete[] tComplex;
-	delete[] tArray;
-
-}
-
-void AddPadding(float(*block)[SIZE * 2], int nrows, int ncols, int nreflects)
-{
-	// Pad out input image by reflection.
-	if (nreflects > 0)
-	{
-		int rval = (SIZE * 2 / 2 + 1) - nrows / 2;
-		int cval = (SIZE * 2 / 2 + 1) - ncols / 2;
-		nreflects = std::min(nreflects, std::min(rval, cval) - 2);
-		printf("%d %d %d %d %d\n", rval, cval, nrows, ncols, nreflects);
-
-		for (int irow = rval - nreflects; irow < (rval + nrows + nreflects); irow++)
-		{
-			for (int c = cval - nreflects, c2 = cval + nreflects; c < cval; c++, c2--)
-			{
-				block[irow][c] = block[irow][c2];
-				block[irow][c2 + ncols - 1] = block[irow][c + ncols - 1];
-			}
-		}
-
-		for (int icol = cval - nreflects; icol < (cval + ncols + nreflects); icol++)
-		{
-			for (int r = rval - nreflects, r2 = rval + nreflects; r < rval; r++, r2--)
-			{
-				block[r][icol] = block[r2][icol];
-				block[r2 + nrows - 1][icol] = block[r + nrows - 1][icol];
-			}
-		}
-	}
-}
-
-void FFT2D(std::complex<float>(*array)[SIZE * 2], int nrows, int ncols, int sign)
-{
-	FFT((std::complex<float> *)array, SIZE * SIZE * 4, sign);
-	printf("ex FFT2D %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
-
-}
-
-//************************************************************************
-// Everything below here implements a Complex 2D Convolution for
-// Complex arrays 'target' and 'kernel'.
-// ************************************************************************
-
-
-void convolution(std::complex<float>(*target)[SIZE * 2], std::complex<float>(*kernel)[SIZE * 2])
-{
-	// FFT the two arrays, multiply together and find inverse FFT of product.
-	// Multiplication in the frequency domain is a convolution in the image domain.
-	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
-
-	int par = 1;
-	if (par) {
-		Concurrency::parallel_invoke(
-			[&target] {FFT2D(target, SIZE * 2, SIZE * 2, 1); },
-			[&kernel] {FFT2D(kernel, SIZE * 2, SIZE * 2, 1); }
-		);
-		printf("parallel_invoke: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
-	}
-	else {
-		FFT2D(target, SIZE * 2, SIZE * 2, 1);
-		FFT2D(kernel, SIZE * 2, SIZE * 2, 1);
-		printf("seq_invoke: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
-	}
-
-	int testmode = 1;
-	int includeifft = 1;
-
-	for (int irow = 0; irow < SIZE * 2; irow++)
-	{
-		for (int icol = 0; icol < SIZE * 2; icol++)
-		{
-
-			if (testmode == 1)
-			{
-				//Convolution
-				target[irow][icol] = target[irow][icol] * kernel[irow][icol];
-			}
-			if (testmode == 2)
-			{
-				// Write across only
-				target[irow][icol] = target[irow][icol];
-			}
-			if (testmode == 3)
-			{
-				// Scaled kernel;  (2295=255*9)
-				target[irow][icol] = std::complex<float>(2295, 0) * kernel[irow][icol];
-			}
-		}
-	}
-	if (includeifft == 1)
-	{
-		FFT2D(target, SIZE * 2, SIZE * 2, -1);
-	}
-}
-
-
-inline void FFT(std::complex<float>* Fdata, int n, int sign)
-{
-	// sign =1 for forward FFT, -1 for inverse
-
-	std::complex<float> u, w, t;
-	int nv, nm1, i, ip, j, k, l, le, ne;
-	double pi, cnst;
-
-	pi = 4 * std::atan(1.0);
-
-	/* Bit reverse first */
-
-	nm1 = n - 1;
-	nv = n / 2;
-	for (i = 0, j = 0; i < nm1; i++) {
-		if (i < j) {
-			t = Fdata[j];
-			Fdata[j] = Fdata[i];
-			Fdata[i] = t;
-		}
-		k = nv;
-		while (k <= j) {
-			j = j - k;
-			k = k / 2;
-		}
-		j = j + k;
-	}
-
-	/* now transform  */
-
-	for (l = 2; l <= n; l *= 2) {
-		le = l / 2;
-		ne = n - le;
-		cnst = pi / le;
-		w = std::complex<float>(cos(cnst), -sign * sin(cnst));
-		u = std::complex<float>(1.0, 0.0);
-		for (j = 0; j < le; j++) {
-			for (i = j; i < ne; i += l) {
-				ip = i + le;
-				t = Fdata[ip] * u;
-				Fdata[ip] = Fdata[i] - t;
-				Fdata[i] = Fdata[i] + t;
-			}
-			u = u * w;
-		}
-
-	}
-	if (sign == -1)  for (i = 0; i < n; i++) Fdata[i] = Fdata[i] / float(n);
-	return;
-} /* end of FFT */
 
 
 int main(int argc, char* argv[]) {
