@@ -44,7 +44,7 @@ void getGaussian(T& kernel, const double sigma, int width = 0, int FFT_length = 
 	for (float y = -mid_w; y <= mid_w; ++y, ++i)
 		kernel[i] = (exp(-(y * y) / s)) / (M_PI * s);
 
-	const double sum = 1. / std::accumulate(&kernel[0], &kernel[width], 0.);
+	const double sum = 1. / std::accumulate(&kernel[0], &kernel[width-1], 0.);
 
 	for (int i = 0; i < width; ++i) kernel[i] *= sum;
 	printf("\nsum %f\n", std::accumulate(&kernel[0], &kernel[width], 0.));
