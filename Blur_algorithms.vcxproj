@@ -80,12 +80,12 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
     <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);C:\Users\miki\Downloads\opencv-4.6.0\build\install\include;C:\Program Files (x86)\PRETTY_FAST_FFT\include</IncludePath>
-    <LibraryPath>$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64);C:\Users\miki\Downloads\opencv-4.6.0\build\install\x64\vc17\staticlib\;C:\Program Files (x86)\PRETTY_FAST_FFT\lib</LibraryPath>
+    <LibraryPath>$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64);C:\Program Files (x86)\PRETTY_FAST_FFT\lib</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);C:\Users\miki\Downloads\opencv-4.6.0\include;C:\Users\miki\Simd\src;C:\Program Files (x86)\PRETTY_FAST_FFT\release\include</IncludePath>
-    <LibraryPath>$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64);C:\Users\miki\Downloads\opencv-4.6.0\x64\vc16\staticlib;C:\Users\miki\Simd\bin\v143\x64\Release;C:\Program Files (x86)\PRETTY_FAST_FFT\release\lib</LibraryPath>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);C:\Users\miki\Downloads\opencv-4.6.0\include;C:\Program Files (x86)\PRETTY_FAST_FFT\release\include</IncludePath>
+    <LibraryPath>$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64);C:\Program Files (x86)\PRETTY_FAST_FFT\release\lib</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -128,7 +128,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>C:\Users\miki\Downloads\opencv-4.6.0\build\install\x64\vc17\staticlib\*.lib;pffft.lib;pffastconv.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>C:\Users\miki\Downloads\opencv-4.6.0\build\install\x64\vc17\staticlib\*.lib;pffft.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -150,7 +150,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>Amx.lib;Avx1.lib;Avx2.lib;Avx512bf16.lib;Avx512bw.lib;Avx512vnni.lib;Base.lib;Neon.lib;Simd.lib;Sse41.lib;Vmx.lib;Vsx.lib;ade.lib;IlmImf.lib;ippicvmt.lib;ippiw.lib;ittnotify.lib;libjpeg-turbo.lib;libopenjp2.lib;libpng.lib;libprotobuf.lib;libwebp.lib;opencv_calib3d460.lib;opencv_core460.lib;opencv_dnn460.lib;opencv_features2d460.lib;opencv_flann460.lib;opencv_gapi460.lib;opencv_highgui460.lib;opencv_imgcodecs460.lib;opencv_imgproc460.lib;opencv_ml460.lib;opencv_objdetect460.lib;opencv_photo460.lib;opencv_stitching460.lib;quirc.lib;zlib.lib;pffft.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>C:\Users\miki\Downloads\opencv-4.6.0\x64\vc16\staticlib\*.lib;pffft.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <LargeAddressAware>true</LargeAddressAware>
     </Link>
   </ItemDefinitionGroup>
