@@ -104,8 +104,57 @@ void make_kernel(float* kernel, int kLen, const size_t iFTsize[])
 
 }
 
+template<typename T, typename U>
+void deinterleave_BGR(const T* const interleaved_BGR, U** const deinterleaved_BGR, const uint32_t nsize) {
 
-void pocketfft_2D(cv::Mat image, int nsmooth)
+	const uint32_t block = 256 / 3;
+	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
+
+#pragma omp parallel for
+	for (int32_t x = 0; x < nsize; x += block)
+	{
+		U* const B = deinterleaved_BGR[0] + x;
+		U* const G = deinterleaved_BGR[1] + x;
+		U* const R = deinterleaved_BGR[2] + x;
+		const T* const interleaved_ptr = interleaved_BGR + x * 3;
+
+		const int blockx = std::min(nsize, x + block) - x;
+		for (int xx = 0; xx < blockx; ++xx)
+		{
+			B[xx] = (interleaved_ptr[xx * 3 + 0]);
+			G[xx] = (interleaved_ptr[xx * 3 + 1]);
+			R[xx] = (interleaved_ptr[xx * 3 + 2]);
+		}
+	}
+
+}
+
+template<typename T, typename U>
+void interleave_BGR(const U** const deinterleaved_BGR, T* const interleaved_BGR, const uint32_t nsize) {
+
+	const uint32_t block = 256 / 3;
+	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
+
+#pragma omp parallel for
+	for (int32_t x = 0; x < nsize; x += block)
+	{
+		const U* const B = deinterleaved_BGR[0] + x;
+		const U* const G = deinterleaved_BGR[1] + x;
+		const U* const R = deinterleaved_BGR[2] + x;
+		T* const interleaved_ptr = interleaved_BGR + x * 3;
+
+		const int blockx = std::min(nsize, x + block) - x;
+		for (int xx = 0; xx < blockx; ++xx)
+		{
+			interleaved_ptr[xx * 3 + 0] = B[xx];
+			interleaved_ptr[xx * 3 + 1] = G[xx];
+			interleaved_ptr[xx * 3 + 2] = R[xx];
+		}
+	}
+
+}
+
+void pocketfft_2D(cv::Mat image, double nsmooth)
 {
 	//pocketfft can handle non-small prime numbers decomposition of ndata but becomes slower, pffft cannot handle them and force you to add more pad
 
@@ -334,10 +383,9 @@ void pocketfft_1D(cv::Mat image, double nsmooth)
 }
 
 
-void pffft_(cv::Mat image, int nsmooth)
+void pffft_(cv::Mat image, double nsmooth)
 {
 
-	image.convertTo(image, CV_32FC3);
 	double sigma = nsmooth;
 	//calculate a good width of the kernel for our sigma
 	int kSize = gaussian_window(sigma, std::max(image.size[0], image.size[1]));
@@ -360,8 +408,9 @@ void pffft_(cv::Mat image, int nsmooth)
 		}
 	}
 
-	cv::Mat temp[3];
-	cv::split(image, temp);
+	std::vector<std::vector<float>> temp(3, std::vector<float>(image.size[0] * image.size[1]));
+	float* BGR[3] = { temp[0].data(), temp[1].data(), temp[2].data() };
+	deinterleave_BGR((const uint8_t*)image.data, BGR, image.size[0] * image.size[1]);
 
 	start_0 = std::chrono::steady_clock::now();
 
@@ -410,11 +459,12 @@ void pffft_(cv::Mat image, int nsmooth)
 
 			//copy the row and pad by reflection in the aligned vector
 			//left reflected pad
-			std::copy_n(std::reverse_iterator(&((float*)temp[i].data)[(j + 1) * image.size[1]]) + image.size[1] - pad - 1, pad, tile.begin());
+			std::copy_n(std::reverse_iterator(&temp[i].data()[(j + 1) * image.size[1]]) + image.size[1] - pad - 1, pad, tile.begin());
 			//middle
-			std::copy_n(&((float*)temp[i].data)[j * image.size[1]], image.size[1], tile.begin() + pad);
+			std::copy_n(&temp[i].data()[j * image.size[1]], image.size[1], tile.begin() + pad);
 			//right reflected pad
-			std::copy_n(std::reverse_iterator(&((float*)temp[i].data)[(j + 1) * image.size[1]]) + 1, pad, tile.end() - pad /* fft trailing 0s --> */ - trailing_zeros[1]);
+			std::copy_n(std::reverse_iterator(&temp[i].data()[(j + 1) * image.size[1]]) + 1, pad, tile.end() - pad /* fft trailing 0s --> */ - trailing_zeros[1]);
+
 
 			fft_rows.forwardToInternalLayout(tile, work);
 			fft_rows.convolve(work, kerf_1D_row, work, 1.f / sizes[1]);
@@ -425,16 +475,18 @@ void pffft_(cv::Mat image, int nsmooth)
 		}
 
 		//transpose cache-friendly, took from FastBoxBlur
-		flip_block<float, 1>(resf.data(), ((float*)temp[i].data), image.size[1], image.size[0]);
+		flip_block<float, 1>(resf.data(), temp[i].data(), image.size[1], image.size[0]);
+
 
 		pffft::Fft<float> fft_cols(sizes[0]);
 		tile.resize(sizes[0]);
 		work = fft_cols.internalLayoutVector();
 		for (int j = 0; j < image.size[1]; ++j) {
 
-			std::copy_n(std::reverse_iterator(&((float*)temp[i].data)[(j + 1) * image.size[0]]) + image.size[0] - pad - 1, pad, tile.begin());
-			std::copy_n(&((float*)temp[i].data)[j * image.size[0]], image.size[0], tile.begin() + pad);
-			std::copy_n(std::reverse_iterator(&((float*)temp[i].data)[(j + 1) * image.size[0]]) + 1, pad, tile.end() - pad /* fft trailing 0s --> */ - trailing_zeros[0]);
+			std::copy_n(std::reverse_iterator(&temp[i].data()[(j + 1) * image.size[0]]) + image.size[0] - pad - 1, pad, tile.begin());
+			std::copy_n(&temp[i].data()[j * image.size[0]], image.size[0], tile.begin() + pad);
+			std::copy_n(std::reverse_iterator(&temp[i].data()[(j + 1) * image.size[0]]) + 1, pad, tile.end() - pad /* fft trailing 0s --> */ - trailing_zeros[0]);
+
 
 			fft_cols.forwardToInternalLayout(tile, work);
 			fft_cols.convolve(work, kerf_1D_col, work, 1.f / sizes[0]);
@@ -444,16 +496,17 @@ void pffft_(cv::Mat image, int nsmooth)
 			std::copy(tile.begin() + pad, tile.end() - pad - trailing_zeros[0], resf.begin() + j * image.size[0]);
 
 		}
-		flip_block<float, 1>(resf.data(), ((float*)temp[i].data), image.size[0], image.size[1]);
 
-	}
+		flip_block<float, 1>(resf.data(), temp[i].data(), image.size[0], image.size[1]);
+
+		}
 
 	printf("pffft: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
-	cv::merge(temp, 3, image);
 
-	image.convertTo(image, CV_8UC3);
+	interleave_BGR((const float**) BGR, (uint8_t*)image.data, image.size[0] * image.size[1]);
+
 	cv::imwrite("C:/Users/miki/Downloads/c_.png", image);
-}
+	}
 
 
 
@@ -504,7 +557,7 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 		std::chrono::time_point<std::chrono::steady_clock> start_5 = std::chrono::steady_clock::now();
 		//prepare temp vector
 		std::vector<uchar> image_out(sizes[1] * sizes[0] * image.channels());
-		
+
 		uchar* in = image.data;
 		//uchar* out = image_out.data();
 		fastboxblur(in, sizes[1], sizes[0], image.channels(), nsmooth * nsmooth, 2);
@@ -545,7 +598,7 @@ void Test(cv::Mat image, int flag = 0, double nsmooth = 5, bool fast_ = 1)
 	else if (flag == 2) pocketfft_2D(image, nsmooth);
 	else
 	{
-		nsmooth *= nsmooth;
+		nsmooth = (int)nsmooth * (int)nsmooth;
 
 		cv::blur(image, image, cv::Size(nsmooth, nsmooth));
 		cv::blur(image, image, cv::Size(nsmooth, nsmooth));
