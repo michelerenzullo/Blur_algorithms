@@ -1,8 +1,8 @@
 #include <numeric>
 // #include <iostream> 
 #include <pffft.hpp>
-// suppose L2 Cache size of 256KB
-#define POCKETFFT_CACHE_SIZE 262144
+// suppose L2 Cache size of 256KB / sizeof(pocketfft_r<float>) --> 256KB / 24
+#define POCKETFFT_CACHE_SIZE 10922
 #include "pocketfft_hdronly.h"
 #include "fast_box_blur.h"
 #include <opencv2/highgui/highgui.hpp>
@@ -21,9 +21,8 @@
 #endif
 
 
-//#define boxblur // if defined all the tests will be performed for a Box Blur
+// #define boxblur // if defined all the tests will be performed for a Box Blur
 // #define DFT_image // just for pocketfft_2D
-
 
 int gaussian_window(const double sigma, const int max_width = 0) {
 	// calculate the width necessary for the provided sigma
@@ -39,6 +38,7 @@ int gaussian_window(const double sigma, const int max_width = 0) {
 
 	return width;
 }
+
 template<typename T>
 void getGaussian(T& kernel, const double sigma, int width = 0, int FFT_length = 0)
 {
@@ -101,6 +101,43 @@ void box_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
 		}
 	}
 }
+
+template<typename T, int C>
+void Reflect_101(const T* const input, T* output, int pad_top, int pad_bottom, int pad_left, int pad_right, const int* original_size) {
+
+	//constraint to prevent out of buffer reading
+	pad_top = std::min(pad_top, original_size[0] - 1);
+	pad_bottom = std::min(pad_bottom, original_size[0] - 1);
+	pad_left = std::min(pad_left, original_size[1] - 1);
+	pad_right = std::min(pad_right, original_size[1] - 1);
+
+	const int stride[2] = { original_size[0], original_size[1] * C };
+	const int padded[2] = { stride[0] + pad_top + pad_bottom, stride[1] + (pad_left + pad_right) * C };
+	const int right_offset = (pad_right - pad_left) * C;
+
+#pragma omp parallel for
+	for (int i = 0; i < padded[0]; ++i) {
+
+		if (i >= padded[0] - pad_bottom)
+			std::copy_n(&input[stride[1] * (2 * stride[0] - i + pad_top - 2)], stride[1], &output[i * padded[1] + pad_left * C]);
+		else
+			std::copy_n(&input[stride[1] * abs(i - pad_top)], stride[1], &output[i * padded[1] + pad_left * C]);
+
+
+		for (int j = 0; j < padded[1]; j += C) {
+			if (j < pad_left * C)
+				for (int ch = 0; ch < C; ++ch)
+					output[i * padded[1] + j + ch] = output[i * padded[1] + 2 * pad_left * C - j + ch];
+			else if (j >= padded[1] - pad_right * C) {
+				for (int ch = 0; ch < C; ++ch)
+					output[i * padded[1] + j + ch] = output[(i + 1) * padded[1] - j + stride[1] - 2 * C + ch - right_offset];
+			}
+		}
+	}
+
+}
+
+
 
 // Utils from pffft to check the nearest efficient transform size of FFT
 int isValidSize(int N) {
@@ -206,7 +243,13 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 		}
 	}
 
-	cv::copyMakeBorder(image, image, border[0], border[1], border[2], border[3], CV_HAL_BORDER_REFLECT);
+
+	int original_size[2] = { image.size[0], image.size[1] };
+	cv::Mat padded(sizes[0], sizes[1], CV_8UC3);
+	Reflect_101<uint8_t, 3>((const uint8_t* const)image.data, padded.data, border[0], border[1], border[2], border[3], original_size);
+	image = padded;
+
+	// cv::copyMakeBorder(image, image, border[0], border[1], border[2], border[3], CV_HAL_BORDER_REFLECT_101);
 	// printf("%d %d\n", image.size[0], image.size[1]);
 
 	std::vector<std::vector<float>> temp(3, std::vector<float>(image.size[0] * image.size[1]));
@@ -278,7 +321,7 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 					20 * log10(abs(
 						std::real(resf[row_ * (sizes[1] / 2 + 1) + cval])
 						+ 0.01));
-	}
+			}
 #else
 		// mul image_FFT with kernel_1D_row and kernel_1D_col 
 		for (int i = 0; i < sizes[0]; ++i) {
@@ -291,7 +334,7 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 		// inverse the FFT
 		pocketfft::c2r(shape, strided_out, strided_in, axes, pocketfft::BACKWARD, resf.get(), temp[i].data(), 1.f / ndata, 0);
 #endif
-}
+	}
 
 	printf("PocketFFT 2D: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 	interleave_BGR((const float**)BGR, (uint8_t*)image.data, image.size[0] * image.size[1]);
@@ -586,7 +629,7 @@ void Test(cv::Mat& image, int flag = 0, double nsmooth = 5)
 		printf("OpenCV blur: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 
 
-}
+	}
 }
 
 
