@@ -1,69 +1,6 @@
 #pragma once
 
 
-#include <deque>
-#include <vector>
-
-template <typename T>
-inline void append(std::deque<T>& mydequeue, T param)
-{
-	mydequeue.pop_front();      // or pop()
-	mydequeue.push_back(param); // or push(param)
-}
-
-// this template do a double accumulation at once using a temp circular buffer, but it's inefficient, ignore it
-template <typename T, int C>
-void horizontal_blur_kernel_reflect_double(const T* in, T* out, const int w, const int h, int r)
-{
-	// change the local variable types depending on the template type for faster calculations
-	using calc_type = std::conditional_t<std::is_integral_v<T>, int, float>;
-
-	int ksize = r;
-	r = 0.5f * (r - 1);
-	const float iarr2 = 1.f / ((r + r + 1) * (r + r + 1));
-
-	std::vector<int> lut(w * 2 - 2, 0);
-	for (int i = 0; i < w; ++i)
-		lut[i] = i;
-	std::copy_n(lut.rbegin() + w - 1, w - 2, lut.begin() + w);
-
-#pragma omp parallel for
-	for (int i = 0; i < h; i++)
-	{
-		const int begin = i * w;
-		calc_type acc[C] = {}, acc2[C] = {}; // first value, last value, sliding accumulator
-
-		std::vector<std::deque<calc_type>> d(C, std::deque<calc_type>(ksize + 1, 0));
-
-		for (int j = 0; j < r; ++j)
-			for (int ch = 0; ch < C; ++ch)
-				acc[ch] = acc[ch] + in[(begin + lut[(ksize - j - 1) % lut.size()]) * C + ch];
-
-		for (int j = r; j < ksize; ++j)
-		{
-			for (int ch = 0; ch < C; ++ch)
-			{
-				acc[ch] = acc[ch] + in[(begin + lut[(ksize - j - 1) % lut.size()]) * C + ch];
-				append<calc_type>(d[ch], acc[ch]);
-				acc2[ch] = acc2[ch] - d[ch][0] + d[ch][ksize];
-			}
-		}
-
-		for (int j = 1; j < w + r * 2; ++j)
-		{
-			for (int ch = 0; ch < C; ++ch)
-			{
-				// NOTE: abs(ksize-j) in C++ rather than (ksize-j) because modulo with negative numbers has a different behaviour from python
-				acc[ch] = acc[ch] + in[(begin + lut[j % lut.size()]) * C + ch] - in[(begin + lut[abs(ksize - j) % lut.size()]) * C + ch];
-				append<calc_type>(d[ch], acc[ch]);
-				acc2[ch] = acc2[ch] - d[ch][0] + d[ch][ksize];
-				if (j - r * 2 >= 0)
-					out[(begin + j - r * 2) * C + ch] = acc2[ch] * iarr2 + (std::is_integral_v<T> ? 0.5f : 0);
-			}
-		}
-	}
-}
-
 template <typename T, int C>
 void horizontal_blur_kernel_reflect(const T* in, T* out, const int w, const int h, int r)
 {
