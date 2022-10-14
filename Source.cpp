@@ -75,6 +75,9 @@ void getGaussian(T& kernel, const double sigma, int width = 0, int FFT_length = 
 void box_kernel(float* kernel, int kLen, const size_t iFTsize[])
 {
 	// Create a 2D box blur kernel convolved by itself - aka. 2 passes of BoxBlur
+	// NOTE: This is unusued because the box kernel can be decomposed, so there is not
+	// need to calculate the DFT of a big 2D kernel when we can just compute for a row
+	// or a columm
 	const double scale = 1. / pow(kLen, 4);
 	for (int irow = -kLen + 1; irow <= (kLen - 1); irow++)
 	{
@@ -218,7 +221,9 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 
 	int passes = 1; // we are using 1 pass of the gaussian kernel
 #ifdef boxblur
+	nsmooth = sqrt(std::min((int)nsmooth * (int)nsmooth, std::min(image.size[0] - 1, image.size[1] - 1)));
 	passes = 2; // we are using a the box blur kernel that is convolved by itself, so it's like we are doing 2 passes
+	kSize = nsmooth * nsmooth;
 #endif
 	int pad = (kSize - 1) / 2 * passes;
 
@@ -357,7 +362,9 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 
 	int passes = 1; // we are using 1 pass of the gaussian kernel
 #ifdef boxblur
-	passes = 2;
+	nsmooth = sqrt(std::min((int)nsmooth * (int)nsmooth, std::min(image.size[0] - 1, image.size[1] - 1)));
+	passes = 2; // we are using a the box blur kernel that is convolved by itself, so it's like we are doing 2 passes
+	kSize = nsmooth * nsmooth;
 #endif
 	int pad = (kSize - 1) / 2 * passes;
 
@@ -459,7 +466,6 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 	printf("PocketFFT 1D : %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 	interleave_BGR((const float**)BGR, (uint8_t*)image.data, image.size[0] * image.size[1]);
 
-	image.convertTo(image, CV_8UC3);
 
 }
 
@@ -473,7 +479,9 @@ void pffft_(cv::Mat& image, double nsmooth)
 
 	int passes = 1; // we are using 1 pass for the gaussian kernel
 #ifdef boxblur
-	passes = 2;
+	nsmooth = sqrt(std::min((int)nsmooth * (int)nsmooth, std::min(image.size[0] - 1, image.size[1] - 1)));
+	passes = 2; // we are using a the box blur kernel that is convolved by itself, so it's like we are doing 2 passes
+	kSize = nsmooth * nsmooth;
 #endif
 	int pad = (kSize - 1) / 2 * passes;
 
