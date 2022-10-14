@@ -105,7 +105,8 @@ void box_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
 template<typename T, int C>
 void Reflect_101(const T* const input, T* output, int pad_top, int pad_bottom, int pad_left, int pad_right, const int* original_size) {
 
-	//constraint to prevent out of buffer reading
+	// This function padd a 2D matrix or a multichannel image with the specified top,bottom,left,right pad and it applies
+	// a reflect 101 like cv::copyMakeBorder, the main (and only) difference is the following constraint to prevent out of buffer reading
 	pad_top = std::min(pad_top, original_size[0] - 1);
 	pad_bottom = std::min(pad_bottom, original_size[0] - 1);
 	pad_left = std::min(pad_left, original_size[1] - 1);
@@ -113,7 +114,9 @@ void Reflect_101(const T* const input, T* output, int pad_top, int pad_bottom, i
 
 	const int stride[2] = { original_size[0], original_size[1] * C };
 	const int padded[2] = { stride[0] + pad_top + pad_bottom, stride[1] + (pad_left + pad_right) * C };
-	const int right_offset = (pad_right - pad_left) * C;
+	const int right_offset = (original_size[1] + pad_left - 1) * 2 * C;
+	const int left_offset = pad_left * 2 * C;
+
 
 #pragma omp parallel for
 	for (int i = 0; i < padded[0]; ++i) {
@@ -123,14 +126,14 @@ void Reflect_101(const T* const input, T* output, int pad_top, int pad_bottom, i
 		else
 			std::copy_n(&input[stride[1] * abs(i - pad_top)], stride[1], &output[i * padded[1] + pad_left * C]);
 
-
+		T* const row = output + i * padded[1];
 		for (int j = 0; j < padded[1]; j += C) {
 			if (j < pad_left * C)
 				for (int ch = 0; ch < C; ++ch)
-					output[i * padded[1] + j + ch] = output[i * padded[1] + 2 * pad_left * C - j + ch];
+					row[j + ch] = row[left_offset - j + ch];
 			else if (j >= padded[1] - pad_right * C) {
 				for (int ch = 0; ch < C; ++ch)
-					output[i * padded[1] + j + ch] = output[(i + 1) * padded[1] - j + stride[1] - 2 * C + ch - right_offset];
+					row[j + ch] = row[right_offset - j + ch];
 			}
 		}
 	}
@@ -245,16 +248,15 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 
 
 	int original_size[2] = { image.size[0], image.size[1] };
-	cv::Mat padded(sizes[0], sizes[1], CV_8UC3);
-	Reflect_101<uint8_t, 3>((const uint8_t* const)image.data, padded.data, border[0], border[1], border[2], border[3], original_size);
-	image = padded;
+	auto padded = std::make_unique<uint8_t[]>(sizes[0] * sizes[1] * 3);
+	Reflect_101<uint8_t, 3>((const uint8_t* const)image.data, padded.get(), border[0], border[1], border[2], border[3], original_size);
 
 	// cv::copyMakeBorder(image, image, border[0], border[1], border[2], border[3], CV_HAL_BORDER_REFLECT_101);
 	// printf("%d %d\n", image.size[0], image.size[1]);
 
-	std::vector<std::vector<float>> temp(3, std::vector<float>(image.size[0] * image.size[1]));
+	std::vector<std::vector<float>> temp(3, std::vector<float>(sizes[0] * sizes[1]));
 	float* BGR[3] = { temp[0].data(), temp[1].data(), temp[2].data() };
-	deinterleave_BGR((const uint8_t*)image.data, BGR, image.size[0] * image.size[1]);
+	deinterleave_BGR((const uint8_t*)padded.get(), BGR, sizes[0] * sizes[1]);
 
 
 	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
@@ -337,12 +339,16 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 	}
 
 	printf("PocketFFT 2D: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
-	interleave_BGR((const float**)BGR, (uint8_t*)image.data, image.size[0] * image.size[1]);
+	interleave_BGR((const float**)BGR, (uint8_t*)padded.get(), sizes[0] * sizes[1]);
 
-	image.convertTo(image, CV_8UC3);
-	cv::Rect myroi(border[2], border[0], sizes[1] - border[2] - border[3], sizes[0] - border[0] - border[1]);
-	image = image(myroi);
 
+#pragma omp parallel for
+	for (int i = border[0]; i < sizes[0] - border[1]; ++i) {
+		uint8_t* const row = image.data + (i - border[0]) * image.size[1] * image.channels();
+		uint8_t* const row_padded = padded.get() + i * sizes[1] * image.channels();
+		for (int j = border[2] * image.channels(); j < (sizes[1] - border[3]) * image.channels(); ++j)
+			row[j - border[2] * image.channels()] = row_padded[j];
+	}
 }
 
 
