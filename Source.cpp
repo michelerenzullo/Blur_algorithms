@@ -116,26 +116,23 @@ void Reflect_101(const T* const input, T* output, int pad_top, int pad_bottom, i
 	const int padded[2] = { stride[0] + pad_top + pad_bottom, stride[1] + (pad_left + pad_right) * C };
 	const int right_offset = (original_size[1] + pad_left - 1) * 2 * C;
 	const int left_offset = pad_left * 2 * C;
+	const int bottom_offset = 2 * stride[0] + pad_top - 2;
 
 
 #pragma omp parallel for
 	for (int i = 0; i < padded[0]; ++i) {
-
-		if (i >= padded[0] - pad_bottom)
-			std::copy_n(&input[stride[1] * (2 * stride[0] - i + pad_top - 2)], stride[1], &output[i * padded[1] + pad_left * C]);
-		else
-			std::copy_n(&input[stride[1] * abs(i - pad_top)], stride[1], &output[i * padded[1] + pad_left * C]);
-
 		T* const row = output + i * padded[1];
-		for (int j = 0; j < padded[1]; j += C) {
-			if (j < pad_left * C)
-				for (int ch = 0; ch < C; ++ch)
-					row[j + ch] = row[left_offset - j + ch];
-			else if (j >= padded[1] - pad_right * C) {
-				for (int ch = 0; ch < C; ++ch)
-					row[j + ch] = row[right_offset - j + ch];
-			}
-		}
+
+		if (i < padded[0] - pad_bottom)
+			std::copy_n(&input[stride[1] * abs(i - pad_top)], stride[1], &row[pad_left * C]);
+		else
+			std::copy_n(&input[stride[1] * (bottom_offset - i)], stride[1], &row[pad_left * C]);
+
+		for (int j = 0; j < pad_left * C; j += C)
+			std::copy_n(row + left_offset - j, C, row + j);
+
+		for (int j = padded[1] - pad_right * C; j < padded[1]; j += C)
+			std::copy_n(row + right_offset - j, C, row + j);
 	}
 
 }
