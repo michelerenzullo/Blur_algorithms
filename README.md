@@ -1,4 +1,4 @@
-﻿
+﻿﻿
 # Fast Fourier Convolution - image processing
 
 **DRAFT** - Refactoring and documentation in progress
@@ -23,8 +23,9 @@ The best performance, in order of speed, are obtained trough pffft, pocketfft_1D
 ## Common utils and procedures among the implementations:
 
 ### GaussianBlur sigma
- Given a sigma we calculate the expected window size to contain the distribution, clamping the tails, so that $$radius = {σ \sqrt{2log(255)} -1}
-   $$ $$width = {round(2 radius)} $$ I setted a costraint so that the width (aka gaussian_window) has to be inside the biggest dimension, this means that over that we will crop more the tails reducing the accuracy, but it won't make any difference since is just a big color blurred.  
+ Given a sigma we calculate the expected window size to contain the distribution, clamping the tails, so that  
+ $$radius = {σ\sqrt{2log(255)} -1} $$ 
+ $$width = {round(2 radius)} $$ I setted a costraint so that the width (aka gaussian_window) has to be inside the biggest dimension, this means that over that we will crop more the tails reducing the accuracy, but it won't make any difference since is just a big color blurred.  
    This limit might be increased further till: 
    ```c++
     (width - 1 ) / 2 <=std::min(rows - 1, cols - 1);
@@ -62,7 +63,8 @@ It's similar to `cv::split` and `cv::merge`, with 24bit images (RGB), and it per
 ## Differences in the implementations:
 1) 1D (pffft and pocketfft_1D) vs 2D (pocketfft_2D) 
 	  - processing 1 dimension at time first row by row, then tranpose, second col by col, then transpose back, is more memory and cache friendly since the padding to reflect the borders is done time by time, and trailing zeros are added at the end of the row, thus the plan informations are reused.
-	 - The big 2D "approach" requires more memory to padd prior each dimension and it's not cache friendly, so it's usually slower, but it's needed when we want the save the output spectrum of the image, I added a macro `#define DFT_image` that skips the convolution and just save the spectrum image $$ 20 log_{10}(| real | + 0.01) $$ 
+	 - The big 2D "approach" requires more memory to padd prior each dimension and it's not cache friendly, so it's usually slower, but it's needed when we want the save the output spectrum of the image, I added a macro `#define DFT_image` that skips the convolution and just save the spectrum image  
+	 $$20 log_{10}(| real | + 0.00001) $$ 
 
  2) pffft
 	  -  doesn't support N dimensions, only 1D, so even if you pass a 2D image, it will be processed as a flattened big row, therefore I adopted the process "for tiles"

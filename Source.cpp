@@ -219,8 +219,8 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 				int cval = col_ < (sizes[1] / 2 + 1) ? col_ : ((sizes[1] / 2) - col_ % (sizes[1] / 2));
 				temp[i].data()[row * sizes[1] + col] =
 					20 * log10(abs(
-						std::real(resf[row_ * (sizes[1] / 2 + 1) + cval])
-						+ 0.01));
+						std::real(resf[row_ * (sizes[1] / 2 + 1) + cval]))
+						+ 0.00001f);
 			}
 #else
 		// mul image_FFT with kernel_1D_row and kernel_1D_col 
