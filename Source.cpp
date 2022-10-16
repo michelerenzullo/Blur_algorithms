@@ -135,14 +135,12 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 	for (int i = 0; i < 2; ++i) {
 		if (!isValidSize(sizes[i]))
 		{
-			// printf("pre %d %d %d %d %d %d %d\n", sizes[0], sizes[1], border[0], border[1], border[2], border[3], pffft::Fft<float>::isValidSize(sizes[i]));
 			int new_size = nearestTransformSize(sizes[i]);
 			int new_pad = (new_size - sizes[i]);
 			sizes[i] = new_size;
 			border[i * 2 + 0] += new_pad / 2; // floor - fix for new_pad when not even
 			border[i * 2 + 1] += new_pad / 2.f + 0.5f; // ceil if odd - fix for new_pad when not even
 
-			// printf("post %d %d %d %d %d %d %d\n", sizes[0], sizes[1], border[0], border[1], border[2], border[3], pffft::Fft<float>::isValidSize(sizes[i]));
 		}
 	}
 
@@ -417,11 +415,9 @@ void pffft_(cv::Mat& image, double nsmooth)
 	AlignedVector<float> kerf_1D_row(sizes[1]);
 	AlignedVector<float> kerf_1D_col;
 
-	// pffft::Fft<float> fft_kernel_1D_row(sizes[1]);
 	PFFFT_Setup* rows = pffft_new_setup(sizes[1], PFFFT_REAL);
 	PFFFT_Setup* cols = pffft_new_setup(sizes[0], PFFFT_REAL);
 
-	// fft_kernel_1D_row.forwardToInternalLayout(kernel_aligned_1D_row, kerf_1D_row);
 	AlignedVector<float> tmp;
 	const int maxsize = std::max(sizes[0], sizes[1]);
 	tmp.reserve(maxsize);
@@ -451,7 +447,7 @@ void pffft_(cv::Mat& image, double nsmooth)
 	const float divisor_row = 1.f / sizes[1];
 	const float divisor_col = 1.f / sizes[0];
 
-	//#pragma omp parallel for firstprivate(tmp)
+
 	for (int i = 0; i < 3; ++i) {
 		AlignedVector<float> resf(ndata);
 		tmp.resize(sizes[1]);
