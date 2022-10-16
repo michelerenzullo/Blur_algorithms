@@ -108,7 +108,7 @@ void deinterleave_BGR(const T* const interleaved_BGR, U** const deinterleaved_BG
 
 	// Cache-friendly deinterleave BGR, splitting for blocks of 256 KB, inspired by flip-block
 	constexpr float round = std::is_integral_v<U> ? std::is_integral_v<T> ? 0 : 0.5f : 0;
-	const uint32_t block = 262144 / (3 * std::max(sizeof(T), sizeof(U)));
+	const uint32_t block = sqrt(262144.0 / (3 * std::max(sizeof(T), sizeof(U))));
 
 #pragma omp parallel for
 	for (int32_t x = 0; x < nsize; x += block)
@@ -133,7 +133,7 @@ template<typename T, typename U>
 void interleave_BGR(const U** const deinterleaved_BGR, T* const interleaved_BGR, const uint32_t nsize) {
 
 	constexpr float round = std::is_integral_v<T> ? std::is_integral_v<U> ? 0 : 0.5f : 0;
-	const uint32_t block = 262144 / (3 * std::max(sizeof(T), sizeof(U)));
+	const uint32_t block = sqrt(262144.0 / (3 * std::max(sizeof(T), sizeof(U))));
 
 #pragma omp parallel for
 	for (int32_t x = 0; x < nsize; x += block)
