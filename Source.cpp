@@ -1,6 +1,8 @@
 #include <numeric>
-// #include <iostream> 
-#include <pffft.hpp>
+// #include <iostream>
+#include <pffft.h>
+#include "Utils.hpp"
+// #include <execution>
 // suppose L2 Cache size of 256KB / sizeof(pocketfft_r<float>) --> 256KB / 24
 #define POCKETFFT_CACHE_SIZE 10922
 #include "pocketfft_hdronly.h"
@@ -23,6 +25,8 @@
 
 // #define boxblur // if defined all the tests will be performed for a Box Blur
 // #define DFT_image // just for pocketfft_2D
+
+template<typename T> using AlignedVector = typename std::vector< T, PFAlloc<T> >;
 
 int gaussian_window(const double sigma, const int max_width = 0) {
 	// calculate the width necessary for the provided sigma
@@ -105,112 +109,6 @@ void box_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
 	}
 }
 
-template<typename T, int C>
-void Reflect_101(const T* const input, T* output, int pad_top, int pad_bottom, int pad_left, int pad_right, const int* original_size) {
-
-	// This function padd a 2D matrix or a multichannel image with the specified top,bottom,left,right pad and it applies
-	// a reflect 101 like cv::copyMakeBorder, the main (and only) difference is the following constraint to prevent out of buffer reading
-	pad_top = std::min(pad_top, original_size[0] - 1);
-	pad_bottom = std::min(pad_bottom, original_size[0] - 1);
-	pad_left = std::min(pad_left, original_size[1] - 1);
-	pad_right = std::min(pad_right, original_size[1] - 1);
-
-	const int stride[2] = { original_size[0], original_size[1] * C };
-	const int padded[2] = { stride[0] + pad_top + pad_bottom, stride[1] + (pad_left + pad_right) * C };
-	const int right_offset = (original_size[1] + pad_left - 1) * 2 * C;
-	const int left_offset = pad_left * 2 * C;
-	const int bottom_offset = 2 * stride[0] + pad_top - 2;
-
-
-#pragma omp parallel for
-	for (int i = 0; i < padded[0]; ++i) {
-		T* const row = output + i * padded[1];
-
-		if (i < padded[0] - pad_bottom)
-			std::copy_n(&input[stride[1] * abs(i - pad_top)], stride[1], &row[pad_left * C]);
-		else
-			std::copy_n(&input[stride[1] * (bottom_offset - i)], stride[1], &row[pad_left * C]);
-
-		for (int j = 0; j < pad_left * C; j += C)
-			std::copy_n(row + left_offset - j, C, row + j);
-
-		for (int j = padded[1] - pad_right * C; j < padded[1]; j += C)
-			std::copy_n(row + right_offset - j, C, row + j);
-	}
-
-}
-
-
-
-// Utils from pffft to check the nearest efficient transform size of FFT
-int isValidSize(int N) {
-	const int N_min = 32;
-	int R = N;
-	while (R >= 5 * N_min && (R % 5) == 0)  R /= 5;
-	while (R >= 3 * N_min && (R % 3) == 0)  R /= 3;
-	while (R >= 2 * N_min && (R % 2) == 0)  R /= 2;
-	return (R == N_min) ? 1 : 0;
-}
-
-int nearestTransformSize(int N) {
-	const int N_min = 32;
-	if (N < N_min) N = N_min;
-	N = N_min * ((N + N_min - 1) / N_min);
-
-	while (!isValidSize(N)) N += N_min;
-	return N;
-}
-
-template<typename T, typename U>
-void deinterleave_BGR(const T* const interleaved_BGR, U** const deinterleaved_BGR, const uint32_t nsize) {
-
-	// Cache-friendly deinterleave BGR, splitting for blocks of 256 KB, inspired by flip-block
-	constexpr float round = std::is_integral_v<U> ? std::is_integral_v<T> ? 0 : 0.5f : 0;
-	const uint32_t block = 262144 / (3 * std::max(sizeof(T), sizeof(U)));
-
-#pragma omp parallel for
-	for (int32_t x = 0; x < nsize; x += block)
-	{
-		U* const B = deinterleaved_BGR[0] + x;
-		U* const G = deinterleaved_BGR[1] + x;
-		U* const R = deinterleaved_BGR[2] + x;
-		const T* const interleaved_ptr = interleaved_BGR + x * 3;
-
-		const int blockx = std::min(nsize, x + block) - x;
-		for (int xx = 0; xx < blockx; ++xx)
-		{
-			B[xx] = interleaved_ptr[xx * 3 + 0] + round;
-			G[xx] = interleaved_ptr[xx * 3 + 1] + round;
-			R[xx] = interleaved_ptr[xx * 3 + 2] + round;
-		}
-	}
-
-}
-
-template<typename T, typename U>
-void interleave_BGR(const U** const deinterleaved_BGR, T* const interleaved_BGR, const uint32_t nsize) {
-
-	constexpr float round = std::is_integral_v<T> ? std::is_integral_v<U> ? 0 : 0.5f : 0;
-	const uint32_t block = 262144 / (3 * std::max(sizeof(T), sizeof(U)));
-
-#pragma omp parallel for
-	for (int32_t x = 0; x < nsize; x += block)
-	{
-		const U* const B = deinterleaved_BGR[0] + x;
-		const U* const G = deinterleaved_BGR[1] + x;
-		const U* const R = deinterleaved_BGR[2] + x;
-		T* const interleaved_ptr = interleaved_BGR + x * 3;
-
-		const int blockx = std::min(nsize, x + block) - x;
-		for (int xx = 0; xx < blockx; ++xx)
-		{
-			interleaved_ptr[xx * 3 + 0] = B[xx] + round;
-			interleaved_ptr[xx * 3 + 1] = G[xx] + round;
-			interleaved_ptr[xx * 3 + 2] = R[xx] + round;
-		}
-	}
-
-}
 
 void pocketfft_2D(cv::Mat& image, double nsmooth)
 {
@@ -343,7 +241,7 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 	printf("PocketFFT 2D: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 	interleave_BGR((const float**)BGR, (uint8_t*)padded.get(), sizes[0] * sizes[1]);
 
-
+	// crop the image to ignore reflected borders
 #pragma omp parallel for
 	for (int i = border[0]; i < sizes[0] - border[1]; ++i) {
 		uint8_t* const row = image.data + (i - border[0]) * image.size[1] * image.channels();
@@ -469,7 +367,6 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 
 }
 
-
 void pffft_(cv::Mat& image, double nsmooth)
 {
 
@@ -492,9 +389,9 @@ void pffft_(cv::Mat& image, double nsmooth)
 	int trailing_zeros[2] = {};
 
 	for (int i = 0; i < 2; ++i) {
-		if (!pffft::Fft<float>::isValidSize(sizes[i]))
+		if (!isValidSize(sizes[i]))
 		{
-			int new_size = pffft::Fft<float>::nearestTransformSize(sizes[i]);
+			int new_size = nearestTransformSize(sizes[i]);
 			trailing_zeros[i] = (new_size - sizes[i]);
 			sizes[i] = new_size;
 		}
@@ -508,11 +405,7 @@ void pffft_(cv::Mat& image, double nsmooth)
 
 	// fast convolve by pffft, without reordering the z-domain. Thus, we perform a row by row, col by col FFT and convolution with 2x1D kernel
 
-	pffft::AlignedVector<float> kerf_1D_row;
-	pffft::AlignedVector<float> kerf_1D_col;
-
-	pffft::Fft<float> fft_kernel_1D_row(sizes[1]);
-	pffft::AlignedVector<float> kernel_aligned_1D_row = pffft::AlignedVector<float>(fft_kernel_1D_row.getLength());
+	AlignedVector<float> kernel_aligned_1D_row(sizes[1]);
 
 	// create a gaussian 1D kernel with the specified sigma and kernel size, and center it in a length of FFT_length
 #ifdef boxblur
@@ -521,38 +414,57 @@ void pffft_(cv::Mat& image, double nsmooth)
 	getGaussian(kernel_aligned_1D_row, sigma, kSize, sizes[1]);
 #endif
 
-	kerf_1D_row = fft_kernel_1D_row.internalLayoutVector();
-	fft_kernel_1D_row.forwardToInternalLayout(kernel_aligned_1D_row, kerf_1D_row);
+	AlignedVector<float> kerf_1D_row(sizes[1]);
+	AlignedVector<float> kerf_1D_col;
+
+	// pffft::Fft<float> fft_kernel_1D_row(sizes[1]);
+	PFFFT_Setup* rows = pffft_new_setup(sizes[1], PFFFT_REAL);
+	PFFFT_Setup* cols = pffft_new_setup(sizes[0], PFFFT_REAL);
+
+	// fft_kernel_1D_row.forwardToInternalLayout(kernel_aligned_1D_row, kerf_1D_row);
+	AlignedVector<float> tmp;
+	const int maxsize = std::max(sizes[0], sizes[1]);
+	tmp.reserve(maxsize);
+	tmp.resize(sizes[1]);
+
+	pffft_transform(rows, kernel_aligned_1D_row.data(), kerf_1D_row.data(), tmp.data(), PFFFT_FORWARD);
 
 	// calculate the DFT of kernel by col if size of cols is not the same of rows
 	if (sizes[0] != sizes[1]) {
-		pffft::Fft<float> fft_kernel_1D_col(sizes[0]);
-		pffft::AlignedVector<float> kernel_aligned_1D_col = pffft::AlignedVector<float>(fft_kernel_1D_col.getLength());
+
+		AlignedVector<float> kernel_aligned_1D_col(sizes[0]);
 #ifdef boxblur
 		box_kernel_1D(kernel_aligned_1D_col.data(), nsmooth * nsmooth, sizes[0]);
 #else
 		getGaussian(kernel_aligned_1D_col, sigma, kSize, sizes[0]);
 #endif
 
-		kerf_1D_col = fft_kernel_1D_col.internalLayoutVector();
-		fft_kernel_1D_col.forwardToInternalLayout(kernel_aligned_1D_col, kerf_1D_col);
+		kerf_1D_col.resize(sizes[0]);
+		tmp.resize(sizes[0]);
+		pffft_transform(cols, kernel_aligned_1D_col.data(), kerf_1D_col.data(), tmp.data(), PFFFT_FORWARD);
 
 	}
 	else
 		kerf_1D_col = kerf_1D_row;
 
-	int ndata = image.size[0] * image.size[1];
+	const int ndata = image.size[0] * image.size[1];
+	const float divisor_row = 1.f / sizes[1];
+	const float divisor_col = 1.f / sizes[0];
 
-#pragma omp parallel for
+	//#pragma omp parallel for firstprivate(tmp)
 	for (int i = 0; i < 3; ++i) {
-		// if fast don't do z-domain reordering, so it's faster than the normal process, is written in their APIs
+		AlignedVector<float> resf(ndata);
+		tmp.resize(sizes[1]);
 
-		pffft::AlignedVector<float> resf(ndata);
+		AlignedVector<float> tile;
+		tile.reserve(maxsize);
+		tile.resize(sizes[1]);
 
-		pffft::Fft<float> fft_rows(sizes[1]);
-		pffft::AlignedVector<float> tile(sizes[1]);
-		pffft::AlignedVector<float> work = fft_rows.internalLayoutVector();
+		AlignedVector<float> work;
+		work.reserve(maxsize);
+		work.resize(sizes[1]);
 
+#pragma omp parallel for firstprivate(tile, work, tmp)
 		for (int j = 0; j < image.size[0]; ++j) {
 
 			// copy the row and pad by reflection in the aligned vector
@@ -564,21 +476,25 @@ void pffft_(cv::Mat& image, double nsmooth)
 			std::copy_n(std::reverse_iterator(temp[i].data() + (j + 1) * image.size[1] - 1), pad, tile.end() - pad /* fft trailing 0s --> */ - trailing_zeros[1]);
 
 
-			fft_rows.forwardToInternalLayout(tile, work);
-			fft_rows.convolve(work, kerf_1D_row, work, 1.f / sizes[1]);
-			fft_rows.inverseFromInternalLayout(work, tile);
+			pffft_transform(rows, tile.data(), work.data(), tmp.data(), PFFFT_FORWARD);
+
+			// When executing pffft_zconvolve_no_accu inside a parallel for something strange happens internally,
+			// there a few pixels different of 1 compared to when omp parallel is commented out
+			pffft_zconvolve_no_accu(rows, work.data(), kerf_1D_row.data(), work.data(), divisor_row);
+			pffft_transform(rows, work.data(), tile.data(), tmp.data(), PFFFT_BACKWARD);
 
 			// save the 1st pass row by row in the output vector
-			std::copy(tile.begin() + pad, tile.end() - pad - trailing_zeros[1], resf.begin() + j * image.size[1]);
+			std::copy_n(tile.begin() + pad, image.size[1], resf.begin() + j * image.size[1]);
 		}
 
 		// transpose cache-friendly, took from FastBoxBlur
 		flip_block<float, 1>(resf.data(), temp[i].data(), image.size[1], image.size[0]);
 
-
-		pffft::Fft<float> fft_cols(sizes[0]);
+		tmp.resize(sizes[0]);
 		tile.resize(sizes[0]);
-		work = fft_cols.internalLayoutVector();
+		work.resize(sizes[0]);
+
+#pragma omp parallel for firstprivate(tile, work, tmp)
 		for (int j = 0; j < image.size[1]; ++j) {
 
 			std::copy_n(std::reverse_iterator(temp[i].data() + j * image.size[0] + pad + 1), pad, tile.begin());
@@ -586,19 +502,20 @@ void pffft_(cv::Mat& image, double nsmooth)
 			std::copy_n(std::reverse_iterator(temp[i].data() + (j + 1) * image.size[0] - 1), pad, tile.end() - pad /* fft trailing 0s --> */ - trailing_zeros[0]);
 
 
-			fft_cols.forwardToInternalLayout(tile, work);
-			fft_cols.convolve(work, kerf_1D_col, work, 1.f / sizes[0]);
-			fft_cols.inverseFromInternalLayout(work, tile);
+			pffft_transform(cols, tile.data(), work.data(), tmp.data(), PFFFT_FORWARD);
+			pffft_zconvolve_no_accu(cols, work.data(), kerf_1D_col.data(), work.data(), divisor_col);
+			pffft_transform(cols, work.data(), tile.data(), tmp.data(), PFFFT_BACKWARD);
 
 			// save the 2nd pass col by col in the output vector 
-			std::copy(tile.begin() + pad, tile.end() - pad - trailing_zeros[0], resf.begin() + j * image.size[0]);
+			std::copy_n(tile.begin() + pad, image.size[0], resf.begin() + j * image.size[0]);
 
 		}
 
 		flip_block<float, 1>(resf.data(), temp[i].data(), image.size[0], image.size[1]);
 
 	}
-
+	pffft_destroy_setup(cols);
+	pffft_destroy_setup(rows);
 	printf("pffft: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 
 	interleave_BGR((const float**)BGR, (uint8_t*)image.data, image.size[0] * image.size[1]);
@@ -640,7 +557,7 @@ void Test(cv::Mat& image, int flag = 0, double nsmooth = 5)
 		printf("OpenCV blur: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 
 
-	}
+}
 }
 
 
