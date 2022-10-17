@@ -76,9 +76,9 @@ void getGaussian(T& kernel, const double sigma, int width = 0, int FFT_length = 
 // by FastBoxBlur with a sliding accumulator, I left just for documentation. 
 // In the frequency domain we use a true Gaussian kernel
 
-void box_kernel(float* kernel, int kLen, const size_t iFTsize[])
+void box_kernel(float* kernel, int kLen, const size_t FFT_length[2])
 {
-	// Create a 2D box blur kernel convolved by itself - aka. 2 passes of BoxBlur
+	// Create a 2D box blur kernel convolved by itself - aka. 2 passes of BoxBlur (Tent filter)
 	// NOTE: This is unusued because the box kernel can be decomposed, so there is not
 	// need to calculate the DFT of a big 2D kernel when we can just compute for a row
 	// or a columm
@@ -87,24 +87,25 @@ void box_kernel(float* kernel, int kLen, const size_t iFTsize[])
 	{
 		for (int icol = -kLen + 1; icol <= (kLen - 1); icol++)
 		{
-			double kval = ((kLen - abs(irow)) * (kLen - abs(icol)));
-			int rval = (irow + iFTsize[0]) % iFTsize[0];
-			int cval = (icol + iFTsize[1]) % iFTsize[1];
-			kernel[rval * iFTsize[1] + cval] += std::clamp(kval * scale, 0., 1.);
+			const double kval = (kLen - abs(irow)) * (kLen - abs(icol));
+			const int rval = (irow + FFT_length[0]) % FFT_length[0];
+			const int cval = (icol + FFT_length[1]) % FFT_length[1];
+			kernel[rval * FFT_length[1] + cval] += std::clamp(kval * scale, 0., 1.);
 		}
 	}
 
 }
 
-void box_kernel_1D(float* kernel, const int kLen, const size_t iFTsize)
+
+void box_kernel(float* kernel, const int kLen, const size_t FFT_length)
 {
 	// Create a 1D box blur kernel convolved by itself - aka. 2 passes of BoxBlur
 	const double scale = 1. / pow(kLen, 4);
 	for (int irow = -kLen + 1; irow <= (kLen - 1); irow++)
 	{
 		for (int icol = -kLen + 1; icol <= (kLen + 1); icol++) {
-			double kval = (kLen - abs(irow)) * (kLen - abs(icol));
-			kernel[(icol + iFTsize) % iFTsize] += std::clamp(kval * scale, 0., 1.);
+			const double kval = (kLen - abs(irow)) * (kLen - abs(icol));
+			kernel[(icol + FFT_length) % FFT_length] += std::clamp(kval * scale, 0., 1.);
 		}
 	}
 }
@@ -176,7 +177,7 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 	std::shared_ptr<std::complex<float>[]> kerf_1D_row;
 	std::vector<float> kernel_1D_col(sizes[0]);
 #ifdef boxblur
-	box_kernel_1D(kernel_1D_col.data(), nsmooth * nsmooth, sizes[0]);
+	box_kernel(kernel_1D_col.data(), nsmooth * nsmooth, sizes[0]);
 #else
 	getGaussian(kernel_1D_col, sigma, kSize, sizes[0]);
 #endif
@@ -193,7 +194,7 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 		kerf_1D_row = std::make_shared<std::complex<float>[]>(sizes[1] / 2 + 1);
 		std::vector<float> kernel_1D_row(sizes[1]);
 #ifdef boxblur
-		box_kernel_1D(kernel_1D_row.data(), nsmooth * nsmooth, sizes[1]);
+		box_kernel(kernel_1D_row.data(), nsmooth * nsmooth, sizes[1]);
 #else
 		getGaussian(kernel_1D_row, sigma, kSize, sizes[1]);
 #endif
@@ -296,7 +297,7 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 	std::shared_ptr<std::complex<float>[]> kerf_1D_row;
 	std::vector<float> kernel_1D_col(sizes[0]);
 #ifdef boxblur
-	box_kernel_1D(kernel_1D_col.data(), nsmooth * nsmooth, sizes[0]);
+	box_kernel(kernel_1D_col.data(), nsmooth * nsmooth, sizes[0]);
 #else
 	getGaussian(kernel_1D_col, sigma, kSize, sizes[0]);
 #endif
@@ -309,7 +310,7 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 		kerf_1D_row = std::make_shared<std::complex<float>[]>(sizes[1] / 2 + 1);
 		std::vector<float> kernel_1D_row(sizes[1]);
 #ifdef boxblur
-		box_kernel_1D(kernel_1D_row.data(), nsmooth * nsmooth, sizes[1]);
+		box_kernel(kernel_1D_row.data(), nsmooth * nsmooth, sizes[1]);
 #else
 		getGaussian(kernel_1D_row, sigma, kSize, sizes[1]);
 #endif
@@ -407,7 +408,7 @@ void pffft_(cv::Mat& image, double nsmooth)
 
 	// create a gaussian 1D kernel with the specified sigma and kernel size, and center it in a length of FFT_length
 #ifdef boxblur
-	box_kernel_1D(kernel_aligned_1D_row.data(), nsmooth * nsmooth, sizes[1]);
+	box_kernel(kernel_aligned_1D_row.data(), nsmooth * nsmooth, sizes[1]);
 #else
 	getGaussian(kernel_aligned_1D_row, sigma, kSize, sizes[1]);
 #endif
@@ -430,7 +431,7 @@ void pffft_(cv::Mat& image, double nsmooth)
 
 		AlignedVector<float> kernel_aligned_1D_col(sizes[0]);
 #ifdef boxblur
-		box_kernel_1D(kernel_aligned_1D_col.data(), nsmooth * nsmooth, sizes[0]);
+		box_kernel(kernel_aligned_1D_col.data(), nsmooth * nsmooth, sizes[0]);
 #else
 		getGaussian(kernel_aligned_1D_col, sigma, kSize, sizes[0]);
 #endif
