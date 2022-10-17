@@ -1,4 +1,5 @@
-﻿﻿
+﻿
+﻿
 # Fast Fourier Convolution - image processing
 
 **DRAFT** - Refactoring and documentation in progress
@@ -33,7 +34,7 @@ The best performance, in order of speed, are obtained trough pffft, pocketfft_1D
    in order to prevent out-of-buffer reading when reflecting 101 the borders.
 
 ### Padding
-- To smooth the borders I implemented a reflection 101, so that
+- To have a natual fading at borders I implemented a reflection 101, so that
 	`pad = (kernel_width - 1) / 2` 
 	 in any case has to be 
 	 ```c++
@@ -61,17 +62,17 @@ It's similar to `cv::split` and `cv::merge`, with 24bit images (RGB), and it per
 
 
 ## Differences in the implementations:
-1) 1D (pffft and pocketfft_1D) vs 2D (pocketfft_2D) 
+- 1D (pffft and pocketfft_1D) vs 2D (pocketfft_2D) 
 	  - processing 1 dimension at time first row by row, then tranpose, second col by col, then transpose back, is more memory and cache friendly since the padding to reflect the borders is done time by time, and trailing zeros are added at the end of the row, thus the plan informations are reused.
 	 - The big 2D "approach" requires more memory to padd prior each dimension and it's not cache friendly, so it's usually slower, but it's needed when we want the save the output spectrum of the image, I added a macro `#define DFT_image` that skips the convolution and just save the spectrum image  
 	 $$20 log_{10}(| real | + 0.00001) $$ 
 
- 2) pffft
+ - pffft
 	  -  doesn't support N dimensions, only 1D, so even if you pass a 2D image, it will be processed as a flattened big row, therefore I adopted the process "for tiles"
 	  - There is an option to speed-up further, skipping the z-domain reordering, called `forwardToInternalLayout` since we are just doing a convolution and we don't need that the spectrum is sorted.
- 3) pocketfft 
+ - pocketfft 
 	  - supports N dimensions, the output spectrum complex array size will be `(size[0]) * (size[1] / 2 + 1)`, this means that just the last dimension will be shorter since the output spectrum of the forward transform is symmtetrical
-4) Parallel
+- Parallel
 	 - pocketfft_2D is executed in parallel for each channel image
 	 - pocketfft_1D and pffft are executed in parallel for each tiles (row or col), the plans informations are safely shared between threads
 
@@ -80,6 +81,52 @@ The convolution / pointwise multiplication can be done with any kernel but in th
 
 Note: the Box Blur kernel using Fourier Transform is unusued by default since I implemented a different and faster algorithm called `fastboxblur` , but I left it for documentation purposes, you could use it defining the macro `#define boxblur` 
 
+In order to apply the kernel, we are going to do a point wise mul in the frequency domain and we need the same length for the kernel and the image, so once generated a kernel of size N, and given an FFT length of X, we have to padd the kernel adding extra zeros of `X - N` and shift the center element of the kernel to the left-most top corner in order to avoid the circular convolution, this has to be no matter how many dimensions we have.
+
+    Example of 1D padding and centering
+    Box car kernel 3
+    1/3 1/3 1/3
+    
+    FFT Length (for tile) = 8
+    extra padd = 5
+    1/3 1/3 1/3 0 0 0 0 0
+    
+    Shifting and centering
+    1/3 1/3 0 0 0 0 0 1/3
+    The above can be achieved easily with std::rotate
+    
+    Example of 2D padding and centering
+    Box car kernel 3x3
+    1/9 1/9 1/9
+    1/9 1/9 1/9
+    1/9 1/9 1/9
+    
+    FFT Length 64
+    extra padd = 55
+    1/9 1/9 1/9 0 0 0 0 0
+    1/9 1/9 1/9 0 0 0 0 0
+    1/9 1/9 1/9 0 0 0 0 0
+    0    0   0  0 0 0 0 0
+    0    0   0  0 0 0 0 0
+    0    0   0  0 0 0 0 0
+    0    0   0  0 0 0 0 0
+    0    0   0  0 0 0 0 0
+    
+    Shifting and centering
+    1/9 1/9  0  0 0 0 0 1/9
+    1/9 1/9  0  0 0 0 0 1/9
+    0    0   0  0 0 0 0  0
+    0    0   0  0 0 0 0  0
+    0    0   0  0 0 0 0  0
+    0    0   0  0 0 0 0  0
+    0    0   0  0 0 0 0  0
+    1/9 1/9  0  0 0 0 0 1/9
+  
+    
+
+
+When the kernel is centered you will notice that his spectrum has the imaginary part 0, therefore when doing the mul with the image spectrum, we will use just the real part of the complex number.
+o
 
 ## Benchmark coming soon
 
