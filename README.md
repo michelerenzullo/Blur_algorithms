@@ -113,21 +113,33 @@ In order to apply the kernel, we are going to do a point wise mul in the frequen
     0    0   0  0 0 0 0 0
     
     Shifting and centering
-    1/9 1/9  0  0 0 0 0 1/9
-    1/9 1/9  0  0 0 0 0 1/9
-    0    0   0  0 0 0 0  0
-    0    0   0  0 0 0 0  0
-    0    0   0  0 0 0 0  0
-    0    0   0  0 0 0 0  0
-    0    0   0  0 0 0 0  0
-    1/9 1/9  0  0 0 0 0 1/9
+    1/9 1/9 0 0 0 0 0 1/9
+    1/9 1/9 0 0 0 0 0 1/9
+    0    0  0 0 0 0 0  0
+    0    0  0 0 0 0 0  0
+    0    0  0 0 0 0 0  0
+    0    0  0 0 0 0 0  0
+    0    0  0 0 0 0 0  0
+    1/9 1/9 0 0 0 0 0 1/9
   
     
 
 
 When the kernel is centered you will notice that his spectrum has the imaginary part 0, therefore when doing the mul with the image spectrum, we will use just the real part of the complex number.
-o
 
-## Benchmark coming soon
+## Benchmark
+Using an i7-10750H, with 45 images 3 channels from 1500 x 1000 px to 11400 x 7600 px , true Gaussian blur with a sigma of
+$$ sigma = \sqrt{width}$$
+and a setted cache of 262144 bytes for PocketFFT.
+
+We can notice **how surprisingly fast** is the 1D implementation in pffft, just 59 ms with a 24 bit image 1500 x 1000 px to 2451 ms with a 24 bit image 11400 x 7600 px, and is linear!
+
+For comparision I assume that cv::GaussianBlur is the common "standard" and has almost the same performance of pocketfft 1D, but both are like 75 times slower than pffft and having an exponential trend
+
+Pocketfft 2D is quite inefficent and an order of magnitude slower than pffft. 
+
+Detailed timings are inside "py" folder
+![](py/bench.png)
 
 ## Usage and APIs coming soon
+I'm thinking to create a "wrapper" library or maybe just simplify the function calls, since this repository is designed for academic research and probably used by other devs just the pffft implementation.
