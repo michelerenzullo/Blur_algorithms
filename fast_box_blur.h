@@ -1,13 +1,13 @@
 #pragma once
+#include <vector>
 
 
 template <typename T, int C>
-void horizontal_blur_kernel_reflect(const T* in, T* out, const int w, const int h, int r)
+void horizontal_blur_kernel_reflect(const T* in, T* out, const int w, const int h, const int ksize)
 {
 	// change the local variable types depending on the template type for faster calculations
 	using calc_type = std::conditional_t<std::is_integral_v<T>, int, float>;
-
-	r = 0.5f * (r - 1);
+	int r = 0.5f * (ksize - 1);
 	r = std::min(r, w - 1);
 
 	const float iarr = 1.f / (r + r + 1);
@@ -87,6 +87,8 @@ void horizontal_blur_kernel_reflect(const T* in, T* out, const int w, const int 
 template <typename T, int C>
 void flip_block(const T* in, T* out, const int w, const int h)
 {
+	// Suppose a square block of L2 cache size = 256KB
+	// to be divided for the num of channels and bytes
 	const int block = sqrt(262144.0 / (C * sizeof(T)));
 #pragma omp parallel for collapse(2)
 	for (int x = 0; x < w; x += block)
@@ -136,21 +138,21 @@ void flip_block(const T* in, T* out, const int w, const int h, const int c)
 }
 
 template <typename T>
-void horizontal_blur(const T* in, T* out, const int w, const int h, const int c, const int r)
+void horizontal_blur(const T* in, T* out, const int w, const int h, const int c, const int ksize)
 {
 	switch (c)
 	{
 	case 1:
-		horizontal_blur_kernel_reflect<T, 1>(in, out, w, h, r);
+		horizontal_blur_kernel_reflect<T, 1>(in, out, w, h, ksize);
 		break;
 	case 2:
-		horizontal_blur_kernel_reflect<T, 2>(in, out, w, h, r);
+		horizontal_blur_kernel_reflect<T, 2>(in, out, w, h, ksize);
 		break;
 	case 3:
-		horizontal_blur_kernel_reflect<T, 3>(in, out, w, h, r);
+		horizontal_blur_kernel_reflect<T, 3>(in, out, w, h, ksize);
 		break;
 	case 4:
-		horizontal_blur_kernel_reflect<T, 4>(in, out, w, h, r);
+		horizontal_blur_kernel_reflect<T, 4>(in, out, w, h, ksize);
 		break;
 	default:
 		printf("horizontal_blur over %d channels is not supported yet. Add a specific case if possible or fall back to the generic version.\n", c);
@@ -159,7 +161,7 @@ void horizontal_blur(const T* in, T* out, const int w, const int h, const int c,
 }
 
 template <typename T>
-void fastboxblur(T* in, const int w, const int h, const int channels, const int ksize, int passes = 1)
+void fastboxblur(T* in, const int w, const int h, const int channels, const int ksize, const int passes = 1)
 {
 	std::vector<T> tmp(w * h * channels);
 	T* out = tmp.data();
