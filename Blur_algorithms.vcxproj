@@ -160,9 +160,10 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="FastBoxBlur\fast_box_blur.h" />
+    <ClInclude Include="pffft\pffft.h" />
+    <ClInclude Include="pocketfft\pocketfft_hdronly.h" />
     <ClInclude Include="Utils.hpp" />
-    <ClInclude Include="fast_box_blur.h" />
-    <ClInclude Include="pocketfft_hdronly.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" />
