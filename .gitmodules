@@ -1,0 +1,9 @@
+[submodule "pffft"]
+	path = pffft
+	url = https://github.com/marton78/pffft
+[submodule "FastBoxBlur"]
+	path = FastBoxBlur
+	url = https://github.com/michelerenzullo/FastBoxBlur
+[submodule "pocketfft"]
+	path = pocketfft
+	url = https://github.com/mreineck/pocketfft

@@ -160,6 +160,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Utils.hpp" />
     <ClInclude Include="fast_box_blur.h" />
     <ClInclude Include="pocketfft_hdronly.h" />
   </ItemGroup>
