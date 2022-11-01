@@ -1,12 +1,12 @@
 #include <numeric>
 // #include <iostream>
-#include <pffft.h>
+#include "pffft/pffft.h"
 #include "Utils.hpp"
 // #include <execution>
 // suppose L2 Cache size of 256KB / sizeof(pocketfft_r<float>) --> 256KB / 24
 #define POCKETFFT_CACHE_SIZE 10922
-#include "pocketfft_hdronly.h"
-#include "fast_box_blur.h"
+#include "pocketfft/pocketfft_hdronly.h"
+#include "FastBoxBlur/fast_box_blur.h"
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/photo/photo.hpp>
 
@@ -38,7 +38,7 @@ int gaussian_window(const double sigma, const int max_width = 0) {
 
 	if (width % 2 == 0) ++width;
 
-	printf("sigma %f radius %f - width %d - max_width %d\n", sigma, radius, width, max_width);
+	//printf("sigma %f radius %f - width %d - max_width %d\n", sigma, radius, width, max_width);
 
 	return width;
 }
@@ -113,6 +113,7 @@ void box_kernel(float* kernel, const int kLen, const size_t FFT_length)
 
 void pocketfft_2D(cv::Mat& image, double nsmooth)
 {
+	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
 	// pocketfft can handle non-small prime numbers decomposition of ndata but becomes slower, pffft cannot handle them and force you to add more pad
 
 	double sigma = nsmooth;
@@ -157,8 +158,6 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 	float* BGR[3] = { temp[0].data(), temp[1].data(), temp[2].data() };
 	deinterleave_BGR((const uint8_t*)padded.get(), BGR, sizes[0] * sizes[1]);
 
-
-	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
 
 	/* arguments settings */
 	pocketfft::shape_t shape{ sizes[0] , sizes[1] };
@@ -253,7 +252,7 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 
 void pocketfft_1D(cv::Mat& image, double nsmooth)
 {
-
+	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
 	double sigma = nsmooth;
 	int kSize = gaussian_window(sigma, std::max(image.size[0], image.size[1]));
 
@@ -283,7 +282,7 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 	float* BGR[3] = { temp[0].data(), temp[1].data(), temp[2].data() };
 	deinterleave_BGR((const uint8_t*)image.data, BGR, image.size[0] * image.size[1]);
 
-	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
+
 
 	/* arguments settings */
 	// kernel 2 x 1D
@@ -360,15 +359,15 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 
 	}
 
-	printf("PocketFFT 1D : %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
-	interleave_BGR((const float**)BGR, (uint8_t*)image.data, image.size[0] * image.size[1]);
 
+	interleave_BGR((const float**)BGR, (uint8_t*)image.data, image.size[0] * image.size[1]);
+	printf("PocketFFT 1D : %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 
 }
 
 void pffft_(cv::Mat& image, double nsmooth)
 {
-
+	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
 	double sigma = nsmooth;
 	// calculate a good width of the kernel for our sigma
 	int kSize = gaussian_window(sigma, std::max(image.size[0], image.size[1]));
@@ -400,7 +399,7 @@ void pffft_(cv::Mat& image, double nsmooth)
 	float* BGR[3] = { temp[0].data(), temp[1].data(), temp[2].data() };
 	deinterleave_BGR((const uint8_t*)image.data, BGR, image.size[0] * image.size[1]);
 
-	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
+
 
 	// fast convolve by pffft, without reordering the z-domain. Thus, we perform a row by row, col by col FFT and convolution with 2x1D kernel
 
@@ -513,9 +512,8 @@ void pffft_(cv::Mat& image, double nsmooth)
 	}
 	pffft_destroy_setup(cols);
 	pffft_destroy_setup(rows);
-	printf("pffft: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
-
 	interleave_BGR((const float**)BGR, (uint8_t*)image.data, image.size[0] * image.size[1]);
+	printf("pffft: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 
 }
 
@@ -554,7 +552,7 @@ void Test(cv::Mat& image, int flag = 0, double nsmooth = 5)
 		printf("OpenCV blur: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 
 
-}
+	}
 }
 
 
@@ -572,6 +570,15 @@ int main(int argc, char* argv[]) {
 
 	cv::Mat test_image = cv::imread(file);
 	Test(test_image, flag, nsmooth);
+	/*
+	// Benchmark test
+	int x = 1500, y = 1000;
+	for (int i = 0; i < 45; ++i) {
+		cv::resize(test_image, test_image, cv::Size(y, x));
+		Test(test_image, flag, sqrt(x));
+		x += 225, y += 150;
+		if (i == 0) cv::imwrite("C:/Users/miki/Downloads/c_.png", test_image);
+	}*/
 	cv::imwrite("C:/Users/miki/Downloads/c_.png", test_image);
 	test_image.release();
 
