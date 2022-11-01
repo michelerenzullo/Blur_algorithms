@@ -4,3 +4,6 @@
 [submodule "FastBoxBlur"]
 	path = FastBoxBlur
 	url = https://github.com/michelerenzullo/FastBoxBlur
+[submodule "pocketfft"]
+	path = pocketfft
+	url = https://github.com/mreineck/pocketfft
