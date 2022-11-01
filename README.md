@@ -142,6 +142,9 @@ Pocketfft 2D is quite inefficent and an order of magnitude slower than pffft.
 Detailed timings are in a jupyter notebook file  py / performance.ipynb
 ![](py/bench.png)
 
+Note: the above test using the Fast Fourier Convolution is made just for the Gaussian kernel, since the Box kernel has been left for documentation and it has been implemented in a different way, through a faster and simpler algorithm called "sliding accumulator", benchmark and details are in its repository [here](https://github.com/michelerenzullo/FastBoxBlur#performance).
+
+
 ## Usage and APIs coming soon
 I'm thinking to create a "wrapper" library or maybe just simplify the function calls, since this repository is designed for academic research and probably used by other developers just the pffft implementation.
 

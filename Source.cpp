@@ -1,8 +1,6 @@
 #include <numeric>
-// #include <iostream>
 #include "pffft/pffft.h"
 #include "Utils.hpp"
-// #include <execution>
 // suppose L2 Cache size of 256KB / sizeof(pocketfft_r<float>) --> 256KB / 24
 #define POCKETFFT_CACHE_SIZE 10922
 #include "pocketfft/pocketfft_hdronly.h"
@@ -16,8 +14,6 @@
 #include <stdlib.h>
 #include <crtdbg.h>
 #define DBG_NEW new ( _NORMAL_BLOCK , __FILE__ , __LINE__ )
-// Replace _NORMAL_BLOCK with _CLIENT_BLOCK if you want the
-// allocations to be of _CLIENT_BLOCK type
 #else
 #define DBG_NEW new
 #endif
