@@ -1,4 +1,5 @@
 ﻿
+
 ﻿
 # Fast Fourier Convolution - image processing
 
@@ -138,8 +139,11 @@ For comparision I assume that cv::GaussianBlur is the common "standard" and has 
 
 Pocketfft 2D is quite inefficent and an order of magnitude slower than pffft. 
 
-Detailed timings are inside "py" folder
+Detailed timings are in a jupyter notebook file  py / performance.ipynb
 ![](py/bench.png)
 
 ## Usage and APIs coming soon
-I'm thinking to create a "wrapper" library or maybe just simplify the function calls, since this repository is designed for academic research and probably used by other devs just the pffft implementation.
+I'm thinking to create a "wrapper" library or maybe just simplify the function calls, since this repository is designed for academic research and probably used by other developers just the pffft implementation.
+
+PocketFFT is header only, so you don't have to compile any library, while pffft implementation has to be compiled first, I compiled the "float" precision version and it's quite easy and intuitive with CMake-GUI. 
+There are the respective git submodules to the repositories in this project.
