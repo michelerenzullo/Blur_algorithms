@@ -129,7 +129,7 @@ When the kernel is centered you will notice that his spectrum has the imaginary 
 
 ## Benchmark
 Using an i7-10750H, with 45 images 3 channels from 1500 x 1000 px to 11400 x 7600 px , true Gaussian blur with a sigma of
-$$ sigma = \sqrt{width}$$
+$$sigma = \sqrt{width}$$
 and a setted cache of 262144 bytes for PocketFFT.
 
 We can notice **how surprisingly fast** is the 1D implementation in pffft, just 59 ms with a 24 bit image 1500 x 1000 px to 2451 ms with a 24 bit image 11400 x 7600 px, and is linear!
