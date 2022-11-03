@@ -35,7 +35,7 @@ The best performance, in order of speed, are obtained trough pffft, pocketfft_1D
    in order to prevent out-of-buffer reading when reflecting 101 the borders.
 
 ### Padding
-- To have a natual fading at borders I implemented a reflection 101, so that
+- To have a natural fading at borders I implemented a reflection 101, so that
 	`pad = (kernel_width - 1) / 2` 
 	 in any case has to be 
 	 ```c++
@@ -63,10 +63,11 @@ It's similar to `cv::split` and `cv::merge`, with 24bit images (RGB), and it per
 
 
 ## Differences in the implementations:
-- 1D (pffft and pocketfft_1D) vs 2D (pocketfft_2D) 
-	  - processing 1 dimension at time first row by row, then tranpose, second col by col, then transpose back, is more memory and cache friendly since the padding to reflect the borders is done time by time, and trailing zeros are added at the end of the row, thus the plan informations are reused.
+- 1D (pffft and pocketfft_1D) vs 2D (pocketfft_2D)  
+	 - processing 1 dimension at time first row by row, then tranpose, second col by col, then transpose back, is more memory and cache friendly since the padding to reflect the borders is done time by time, and trailing zeros are added at the end of the row, thus the plan informations are reused.
+	 
 	 - The big 2D "approach" requires more memory to padd prior each dimension and it's not cache friendly, so it's usually slower, but it's needed when we want the save the output spectrum of the image, I added a macro `#define DFT_image` that skips the convolution and just save the spectrum image  
-	 $$20 log_{10}(| real | + 0.00001) $$ 
+	 $$spectrum = 20 log_{10}(| real | + 0.00001) $$ 
 
  - pffft
 	  -  doesn't support N dimensions, only 1D, so even if you pass a 2D image, it will be processed as a flattened big row, therefore I adopted the process "for tiles"
@@ -82,7 +83,7 @@ The convolution / pointwise multiplication can be done with any kernel but in th
 
 Note: the Box Blur kernel using Fourier Transform is unusued by default since I implemented a different and faster algorithm called `fastboxblur` , but I left it for documentation purposes, you could use it defining the macro `#define boxblur` 
 
-In order to apply the kernel, we are going to do a point wise mul in the frequency domain and we need the same length for the kernel and the image, so once generated a kernel of size N, and given an FFT length of X, we have to padd the kernel adding extra zeros of `X - N` and shift the center element of the kernel to the left-most top corner in order to avoid the circular convolution, this has to be no matter how many dimensions we have.
+In order to apply the kernel, we are going to do a point wise mul in the frequency domain and we need the same length for the kernel and the image, so once generated a kernel of size N, and given an FFT length of X, we have to padd the kernel adding extra zeros of `X - N` and shift the center element of the kernel to the left-most top corner in order to avoid the circular convolution, this has to be done no matter how many dimensions we have.
 
     Example of 1D padding and centering
     Box car kernel 3
