@@ -22,6 +22,49 @@
 // #define boxblur // if defined all the tests will be performed for a Box Blur
 // #define DFT_image // just for pocketfft_2D
 
+void generate_table(uint32_t *crc_table)
+{
+  uint32_t r;
+  for (int i = 0; i < 256; i++)
+  {
+    r = i;
+    for (int j = 0; j < 8; j++)
+    {
+      if (r & 1)
+      {
+        r >>= 1;
+        r ^= 0xEDB88320;
+      }
+      else
+      {
+        r >>= 1;
+      }
+    }
+    crc_table[i] = r;
+  }
+}
+
+uint32_t crc32c(uint8_t *data, size_t bytes, uint8_t *data1 = nullptr, size_t bytes1 = 0)
+{
+  auto crc_table = std::make_unique<uint32_t[]>(256);
+  generate_table(crc_table.get());
+  uint32_t crc = 0xFFFFFFFF;
+  while (bytes--)
+  {
+    int i = (crc ^ *data++) & 0xFF;
+    crc = (crc_table[i] ^ (crc >> 8));
+  }
+  if (data1)
+  {
+    while (bytes1--)
+    {
+      int i = (crc ^ *data1++) & 0xFF;
+      crc = (crc_table[i] ^ (crc >> 8));
+    }
+  }
+  return crc ^ 0xFFFFFFFF;
+}
+
 template<typename T> using AlignedVector = typename std::vector< T, PFAlloc<T> >;
 
 int gaussian_window(const double sigma, const int max_width = 0) {
@@ -127,7 +170,7 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 	int border[4] = { pad, pad, pad, pad };
 
 	// absolute min padding to fit the kernel
-	size_t sizes[2] = { image.size[0] + border[0] + border[1], image.size[1] + border[2] + border[3] };
+	size_t sizes[2] = { (size_t)(image.size[0] + border[0] + border[1]), (size_t)(image.size[1] + border[2] + border[3]) };
 
 	// if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
 	for (int i = 0; i < 2; ++i) {
@@ -200,8 +243,7 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 
 	int ndata = sizes[0] * sizes[1];
 
-#pragma omp parallel for
-	for (int i = 0; i < 3; ++i) {
+    hybrid_loop(3, [&](auto i){
 		auto resf = std::make_unique<std::complex<float>[]>(sizes[0] * (sizes[1] / 2 + 1));
 		pocketfft::r2c(shape, strided_in, strided_out, axes, pocketfft::FORWARD, temp[i].data(), resf.get(), 1.f, 0);
 
@@ -230,19 +272,18 @@ void pocketfft_2D(cv::Mat& image, double nsmooth)
 		// inverse the FFT
 		pocketfft::c2r(shape, strided_out, strided_in, axes, pocketfft::BACKWARD, resf.get(), temp[i].data(), 1.f / ndata, 0);
 #endif
-	}
+	});
 
 	printf("PocketFFT 2D: %f\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_0).count());
 	interleave_BGR((const float**)BGR, (uint8_t*)padded.get(), sizes[0] * sizes[1]);
 
 	// crop the image to ignore reflected borders
-#pragma omp parallel for
-	for (int i = border[0]; i < sizes[0] - border[1]; ++i) {
-		uint8_t* const row = image.data + (i - border[0]) * image.size[1] * image.channels();
-		uint8_t* const row_padded = padded.get() + i * sizes[1] * image.channels();
+    hybrid_loop(sizes[0] - border[1] - border[0], [&](auto i){
+		uint8_t* const row = image.data + i * image.size[1] * image.channels();
+		uint8_t* const row_padded = padded.get() + (i + border[0]) * sizes[1] * image.channels();
 		for (int j = border[2] * image.channels(); j < (sizes[1] - border[3]) * image.channels(); ++j)
 			row[j - border[2] * image.channels()] = row_padded[j];
-	}
+	});
 }
 
 
@@ -261,7 +302,7 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 	int pad = (kSize - 1) / 2 * passes;
 
 	// absolute min padding to fit the kernel
-	size_t sizes[2] = { image.size[0] + pad * 2, image.size[1] + pad * 2 };
+	size_t sizes[2] = { (size_t)(image.size[0] + pad * 2), (size_t)(image.size[1] + pad * 2) };
 
 	// if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad
 	int trailing_zeros[2] = {};
@@ -296,7 +337,7 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 #else
 	getGaussian(kernel_1D_col, sigma, kSize, sizes[0]);
 #endif
-	printf("sizes[0] %d - width %d\n", sizes[0], kSize);
+	printf("sizes[0] %d - width %d\n", (int)sizes[0], kSize);
 
 	pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_col.data(), kerf_1D_col.get(), 1.f, 0);
 
@@ -318,8 +359,8 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 
 	for (int i = 0; i < 3; ++i) {
 		auto resf = std::make_unique<float[]>(ndata);
-#pragma omp parallel for
-		for (int j = 0; j < image.size[0]; ++j) {
+
+        hybrid_loop(image.size[0], [&](auto j){
 			auto tile = std::make_unique<float[]>(sizes[1]);
 			auto work = std::make_unique<std::complex<float>[]>(sizes[1] / 2 + 1);
 
@@ -332,11 +373,10 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 			pocketfft::c2r(shape_row, strided_out_1D, strided_1D, axes_1D, pocketfft::BACKWARD, work.get(), tile.get(), 1.f / sizes[1], 0);
 
 			std::copy(tile.get() + pad, &(tile.get())[sizes[1]] - pad - trailing_zeros[1], resf.get() + j * image.size[1]);
-		}
+		});
 		flip_block<float, 1>(resf.get(), temp[i].data(), image.size[1], image.size[0]);
 
-#pragma omp parallel for
-		for (int j = 0; j < image.size[1]; ++j) {
+        hybrid_loop(image.size[1], [&](auto j){
 			auto tile = std::make_unique<float[]>(sizes[0]);
 			auto work = std::make_unique<std::complex<float>[]>(sizes[0] / 2 + 1);
 
@@ -349,7 +389,7 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 			pocketfft::c2r(shape_col, strided_out_1D, strided_1D, axes_1D, pocketfft::BACKWARD, work.get(), tile.get(), 1.f / sizes[0], 0);
 
 			std::copy(tile.get() + pad, &(tile.get())[sizes[0]] - pad - trailing_zeros[0], resf.get() + j * image.size[0]);
-		}
+		});
 
 		flip_block<float, 1>(resf.get(), temp[i].data(), image.size[0], image.size[1]);
 
@@ -377,7 +417,7 @@ void pffft_(cv::Mat& image, double nsmooth)
 	int pad = (kSize - 1) / 2 * passes;
 
 	// absolute min padd
-	size_t sizes[2] = { image.size[0] + pad * 2, image.size[1] + pad * 2 };
+	size_t sizes[2] = { (size_t)(image.size[0] + pad * 2), (size_t)(image.size[1] + pad * 2) };
 
 	// if the length of the data is not decomposable in small prime numbers 2 - 3 - 5, is necessary to update the size adding more pad as trailing zeros
 	int trailing_zeros[2] = {};
@@ -394,7 +434,7 @@ void pffft_(cv::Mat& image, double nsmooth)
 	std::vector<std::vector<float>> temp(3, std::vector<float>(image.size[0] * image.size[1]));
 	float* BGR[3] = { temp[0].data(), temp[1].data(), temp[2].data() };
 	deinterleave_BGR((const uint8_t*)image.data, BGR, image.size[0] * image.size[1]);
-
+	
 
 
 	// fast convolve by pffft, without reordering the z-domain. Thus, we perform a row by row, col by col FFT and convolution with 2x1D kernel
@@ -448,60 +488,58 @@ void pffft_(cv::Mat& image, double nsmooth)
 		AlignedVector<float> resf(ndata);
 		tmp.resize(sizes[1]);
 
-		AlignedVector<float> tile;
+		AlignedVector<float> tile, work;
 		tile.reserve(maxsize);
 		tile.resize(sizes[1]);
-
-		AlignedVector<float> work;
 		work.reserve(maxsize);
 		work.resize(sizes[1]);
 
-#pragma omp parallel for firstprivate(tile, work, tmp)
-		for (int j = 0; j < image.size[0]; ++j) {
+		hybrid_loop(image.size[0], [&](auto j){
+			auto tmp_local(tmp), tile_local(tile), work_local(work);
 
 			// copy the row and pad by reflection in the aligned vector
 			// left reflected pad
-			std::copy_n(std::reverse_iterator(temp[i].data() + j * image.size[1] + pad + 1), pad, tile.begin());
+			std::copy_n(std::reverse_iterator(temp[i].data() + j * image.size[1] + pad + 1), pad, tile_local.begin());
 			// middle
-			std::copy_n(temp[i].data() + j * image.size[1], image.size[1], tile.begin() + pad);
+			std::copy_n(temp[i].data() + j * image.size[1], image.size[1], tile_local.begin() + pad);
 			// right reflected pad
-			std::copy_n(std::reverse_iterator(temp[i].data() + (j + 1) * image.size[1] - 1), pad, tile.end() - pad /* fft trailing 0s --> */ - trailing_zeros[1]);
+			std::copy_n(std::reverse_iterator(temp[i].data() + (j + 1) * image.size[1] - 1), pad, tile_local.end() - pad /* fft trailing 0s --> */ - trailing_zeros[1]);
 
 
-			pffft_transform(rows, tile.data(), work.data(), tmp.data(), PFFFT_FORWARD);
+			pffft_transform(rows, tile_local.data(), work_local.data(), tmp_local.data(), PFFFT_FORWARD);
 
 			// When executing pffft_zconvolve_no_accu inside a parallel for something strange happens internally,
 			// there a few pixels different of 1 compared to when omp parallel is commented out
-			pffft_zconvolve_no_accu(rows, work.data(), kerf_1D_row.data(), work.data(), divisor_row);
-			pffft_transform(rows, work.data(), tile.data(), tmp.data(), PFFFT_BACKWARD);
+			pffft_zconvolve_no_accu(rows, work_local.data(), kerf_1D_row.data(), work_local.data(), divisor_row);
+			pffft_transform(rows, work_local.data(), tile_local.data(), tmp_local.data(), PFFFT_BACKWARD);
 
 			// save the 1st pass row by row in the output vector
-			std::copy_n(tile.begin() + pad, image.size[1], resf.begin() + j * image.size[1]);
-		}
+			std::copy_n(tile_local.begin() + pad, image.size[1], resf.begin() + j * image.size[1]);
+		});
 
-		// transpose cache-friendly, took from FastBoxBlur
+	    // transpose cache-friendly, took from FastBoxBlur
 		flip_block<float, 1>(resf.data(), temp[i].data(), image.size[1], image.size[0]);
-
+		
 		tmp.resize(sizes[0]);
 		tile.resize(sizes[0]);
-		work.resize(sizes[0]);
+	    work.resize(sizes[0]);
 
-#pragma omp parallel for firstprivate(tile, work, tmp)
-		for (int j = 0; j < image.size[1]; ++j) {
+        hybrid_loop(image.size[1], [&](auto j){
+			auto tmp_local(tmp), tile_local(tile), work_local(work);
 
-			std::copy_n(std::reverse_iterator(temp[i].data() + j * image.size[0] + pad + 1), pad, tile.begin());
-			std::copy_n(temp[i].data() + j * image.size[0], image.size[0], tile.begin() + pad);
-			std::copy_n(std::reverse_iterator(temp[i].data() + (j + 1) * image.size[0] - 1), pad, tile.end() - pad /* fft trailing 0s --> */ - trailing_zeros[0]);
+			std::copy_n(std::reverse_iterator(temp[i].data() + j * image.size[0] + pad + 1), pad, tile_local.begin());
+			std::copy_n(temp[i].data() + j * image.size[0], image.size[0], tile_local.begin() + pad);
+			std::copy_n(std::reverse_iterator(temp[i].data() + (j + 1) * image.size[0] - 1), pad, tile_local.end() - pad /* fft trailing 0s --> */ - trailing_zeros[0]);
 
 
-			pffft_transform(cols, tile.data(), work.data(), tmp.data(), PFFFT_FORWARD);
-			pffft_zconvolve_no_accu(cols, work.data(), kerf_1D_col.data(), work.data(), divisor_col);
-			pffft_transform(cols, work.data(), tile.data(), tmp.data(), PFFFT_BACKWARD);
+			pffft_transform(cols, tile_local.data(), work_local.data(), tmp_local.data(), PFFFT_FORWARD);
+			pffft_zconvolve_no_accu(cols, work_local.data(), kerf_1D_col.data(), work_local.data(), divisor_col);
+			pffft_transform(cols, work_local.data(), tile_local.data(), tmp_local.data(), PFFFT_BACKWARD);
 
 			// save the 2nd pass col by col in the output vector 
-			std::copy_n(tile.begin() + pad, image.size[0], resf.begin() + j * image.size[0]);
+			std::copy_n(tile_local.begin() + pad, image.size[0], resf.begin() + j * image.size[0]);
 
-		}
+		});
 
 		flip_block<float, 1>(resf.data(), temp[i].data(), image.size[0], image.size[1]);
 
@@ -523,7 +561,7 @@ void Test(cv::Mat& image, int flag = 0, double nsmooth = 5)
 	if (flag == 5) pocketfft_1D(image, nsmooth);
 	else if (flag == 4) {
 
-		size_t sizes[2] = { image.size[0], image.size[1] };
+		size_t sizes[2] = { (size_t)image.size[0], (size_t)image.size[1] };
 
 		std::chrono::time_point<std::chrono::steady_clock> start_5 = std::chrono::steady_clock::now();
 
@@ -565,6 +603,7 @@ int main(int argc, char* argv[]) {
 	double nsmooth = atof(argv[2]);
 
 	cv::Mat test_image = cv::imread(file);
+	//cv::resize(test_image, test_image, cv::Size(256, 256));
 	Test(test_image, flag, nsmooth);
 	/*
 	// Benchmark test
@@ -575,9 +614,9 @@ int main(int argc, char* argv[]) {
 		x += 225, y += 150;
 		if (i == 0) cv::imwrite("C:/Users/miki/Downloads/c_.png", test_image);
 	}*/
-	cv::imwrite("C:/Users/miki/Downloads/c_.png", test_image);
+	cv::imwrite("/Users/miki/Downloads/Blur_algorithms/c_.png", test_image);
 	test_image.release();
-
+	
 #ifdef _DEBUG
 	_CrtDumpMemoryLeaks();
 #endif

@@ -1,5 +1,57 @@
 #pragma once
 #include <stdlib.h>
+//#include <emscripten/bind.h>
+//#include <emscripten/val.h>
+#ifdef OMP
+#include <omp.h>
+#endif
+#include <memory>
+#include <thread>
+#include <iostream>
+//#include <sanitizer/lsan_interface.h>
+
+//typedef emscripten::val em_val;
+
+template <typename T, typename op>
+void hybrid_loop(T end, op operation)
+{
+	auto operation_wrapper = [&](T i, int tid = 0)
+	{
+		if constexpr (std::is_invocable_v<op, T>) operation(i);
+		else operation(i, tid);
+	};
+#ifdef SINGLE
+	for (T i = 0; i < end; ++i) operation_wrapper(i);
+#elif OMP
+#pragma omp parallel for
+	for (T i = 0; i < end; ++i) operation_wrapper(i, omp_get_thread_num());
+#elif defined __EMSCRIPTEN_THREADS__ || defined MYLOOP
+	const int num_threads = std::thread::hardware_concurrency();
+
+	// Split in block equally for each thread. ex: 3 threads, start = 0, end = 8
+    // Thread 0: 0,1,2
+    // Thread 1: 3,4,5
+    // Thread 2: 6,7
+	// Also don't spawn more threads than needed
+	// ex: 4 threads, start = 0, end = 3
+    // Thread 0: 0
+    // Thread 1: 1
+    // Thread 2: 2
+    // Thread 3: NOT SPAWNED
+	const T block_size = (end + num_threads - 1) / num_threads;
+	std::vector<std::thread> threads;
+	const int threads_needed = std::min(num_threads, (int)std::ceil(end / (float)block_size));
+	for (int tid = 0; tid < threads_needed; ++tid)
+	{
+		threads.emplace_back([=]() {
+			T block_start = tid * block_size;
+            T block_end = (tid == threads_needed - 1) ? end : block_start + block_size;
+
+            for (T i = block_start; i < block_end; ++i) operation_wrapper(i, tid);});
+	}
+	for (auto &thread : threads) thread.join();
+#endif
+}
 
 #define MALLOC_V4SF_ALIGNMENT 64
 
@@ -104,53 +156,55 @@ int nearestTransformSize(int N) {
 }
 
 template<typename T, typename U>
-void deinterleave_BGR(const T* const interleaved_BGR, U** const deinterleaved_BGR, const uint32_t nsize) {
+void deinterleave_BGR(const T* const interleaved_BGR, U** const deinterleaved_BGR, const uint32_t total_size) {
 
 	// Cache-friendly deinterleave BGR, splitting for blocks of 256 KB, inspired by flip-block
 	constexpr float round = std::is_integral_v<U> ? std::is_integral_v<T> ? 0 : 0.5f : 0;
 	constexpr uint32_t block = 262144 / (3 * std::max(sizeof(T), sizeof(U)));
+    const uint32_t num_blocks = std::ceil(total_size / (float)block);
+	const uint32_t last_block_size = total_size % block == 0 ? block : total_size % block;
 
-#pragma omp parallel for
-	for (int32_t x = 0; x < nsize; x += block)
-	{
+    hybrid_loop(num_blocks, [&](auto n) {
+		const uint32_t x = n * block;
 		U* const B = deinterleaved_BGR[0] + x;
 		U* const G = deinterleaved_BGR[1] + x;
 		U* const R = deinterleaved_BGR[2] + x;
 		const T* const interleaved_ptr = interleaved_BGR + x * 3;
 
-		const int blockx = std::min(nsize, x + block) - x;
+		const int blockx = (n == num_blocks - 1) ? last_block_size : block;
 		for (int xx = 0; xx < blockx; ++xx)
 		{
 			B[xx] = interleaved_ptr[xx * 3 + 0] + round;
 			G[xx] = interleaved_ptr[xx * 3 + 1] + round;
 			R[xx] = interleaved_ptr[xx * 3 + 2] + round;
 		}
-	}
+	});
 
 }
 
 template<typename T, typename U>
-void interleave_BGR(const U** const deinterleaved_BGR, T* const interleaved_BGR, const uint32_t nsize) {
+void interleave_BGR(const U** const deinterleaved_BGR, T* const interleaved_BGR, const uint32_t total_size) {
 
 	constexpr float round = std::is_integral_v<T> ? std::is_integral_v<U> ? 0 : 0.5f : 0;
 	constexpr uint32_t block = 262144 / (3 * std::max(sizeof(T), sizeof(U)));
-
-#pragma omp parallel for
-	for (int32_t x = 0; x < nsize; x += block)
-	{
+    const uint32_t num_blocks = std::ceil(total_size / (float)block);
+	const uint32_t last_block_size = total_size % block == 0 ? block : total_size % block;
+	
+    hybrid_loop(num_blocks, [&](auto n) {
+		const uint32_t x = n * block;
 		const U* const B = deinterleaved_BGR[0] + x;
 		const U* const G = deinterleaved_BGR[1] + x;
 		const U* const R = deinterleaved_BGR[2] + x;
 		T* const interleaved_ptr = interleaved_BGR + x * 3;
 
-		const int blockx = std::min(nsize, x + block) - x;
+		const int blockx = (n == num_blocks - 1) ? last_block_size : block;
 		for (int xx = 0; xx < blockx; ++xx)
 		{
 			interleaved_ptr[xx * 3 + 0] = B[xx] + round;
 			interleaved_ptr[xx * 3 + 1] = G[xx] + round;
 			interleaved_ptr[xx * 3 + 2] = R[xx] + round;
 		}
-	}
+	});
 
 }
 
@@ -170,9 +224,7 @@ void Reflect_101(const T* const input, T* output, int pad_top, int pad_bottom, i
 	const int left_offset = pad_left * 2 * C;
 	const int bottom_offset = 2 * (stride[0] - 1) + pad_top;
 
-
-#pragma omp parallel for
-	for (int i = 0; i < padded[0]; ++i) {
+    hybrid_loop(padded[0], [&](auto i){
 		T* const row = output + i * padded[1];
 
 		if (i < padded[0] - pad_bottom)
@@ -185,6 +237,6 @@ void Reflect_101(const T* const input, T* output, int pad_top, int pad_bottom, i
 
 		for (int j = padded[1] - pad_right * C; j < padded[1]; j += C)
 			std::copy_n(row + right_offset - j, C, row + j);
-	}
+	});
 
 }
