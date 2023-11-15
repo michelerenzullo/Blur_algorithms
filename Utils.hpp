@@ -12,6 +12,49 @@
 
 //typedef emscripten::val em_val;
 
+void generate_table(uint32_t *crc_table)
+{
+  uint32_t r;
+  for (int i = 0; i < 256; i++)
+  {
+    r = i;
+    for (int j = 0; j < 8; j++)
+    {
+      if (r & 1)
+      {
+        r >>= 1;
+        r ^= 0xEDB88320;
+      }
+      else
+      {
+        r >>= 1;
+      }
+    }
+    crc_table[i] = r;
+  }
+}
+
+uint32_t crc32c(uint8_t *data, size_t bytes, uint8_t *data1 = nullptr, size_t bytes1 = 0)
+{
+  auto crc_table = std::make_unique<uint32_t[]>(256);
+  generate_table(crc_table.get());
+  uint32_t crc = 0xFFFFFFFF;
+  while (bytes--)
+  {
+    int i = (crc ^ *data++) & 0xFF;
+    crc = (crc_table[i] ^ (crc >> 8));
+  }
+  if (data1)
+  {
+    while (bytes1--)
+    {
+      int i = (crc ^ *data1++) & 0xFF;
+      crc = (crc_table[i] ^ (crc >> 8));
+    }
+  }
+  return crc ^ 0xFFFFFFFF;
+}
+
 template <typename T, typename op>
 void hybrid_loop(T end, op operation)
 {

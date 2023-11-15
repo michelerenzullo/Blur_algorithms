@@ -22,48 +22,6 @@
 // #define boxblur // if defined all the tests will be performed for a Box Blur
 // #define DFT_image // just for pocketfft_2D
 
-void generate_table(uint32_t *crc_table)
-{
-  uint32_t r;
-  for (int i = 0; i < 256; i++)
-  {
-    r = i;
-    for (int j = 0; j < 8; j++)
-    {
-      if (r & 1)
-      {
-        r >>= 1;
-        r ^= 0xEDB88320;
-      }
-      else
-      {
-        r >>= 1;
-      }
-    }
-    crc_table[i] = r;
-  }
-}
-
-uint32_t crc32c(uint8_t *data, size_t bytes, uint8_t *data1 = nullptr, size_t bytes1 = 0)
-{
-  auto crc_table = std::make_unique<uint32_t[]>(256);
-  generate_table(crc_table.get());
-  uint32_t crc = 0xFFFFFFFF;
-  while (bytes--)
-  {
-    int i = (crc ^ *data++) & 0xFF;
-    crc = (crc_table[i] ^ (crc >> 8));
-  }
-  if (data1)
-  {
-    while (bytes1--)
-    {
-      int i = (crc ^ *data1++) & 0xFF;
-      crc = (crc_table[i] ^ (crc >> 8));
-    }
-  }
-  return crc ^ 0xFFFFFFFF;
-}
 
 template<typename T> using AlignedVector = typename std::vector< T, PFAlloc<T> >;
 
@@ -337,7 +295,7 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 #else
 	getGaussian(kernel_1D_col, sigma, kSize, sizes[0]);
 #endif
-	printf("sizes[0] %d - width %d\n", (int)sizes[0], kSize);
+	// printf("sizes[0] %d - width %d\n", (int)sizes[0], kSize);
 
 	pocketfft::r2c(shape_col, strided_1D, strided_out_1D, axes_1D, pocketfft::FORWARD, kernel_1D_col.data(), kerf_1D_col.get(), 1.f, 0);
 
