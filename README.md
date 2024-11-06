@@ -6,9 +6,11 @@
 **DRAFT** - Refactoring and documentation in progress
 
 In this repository we explore a
--  Fast Fourier Convolution algorithm using Fast Fourier Transform
+-  Fast Fourier Convolution algorithm using Fast Fourier Transform  
+<a href="test_images/spectrum_analysis/animation.gif"><img src="test_images/spectrum_analysis/animation.gif" height=550px /></a>  
 - The application of a separable kernel to a 2D image 
 - A true Gaussian blur and box blur
+
 
 Thus this is an alternative to cv::blur and cv::GaussianBlur when OpenCV isn't needed
 
@@ -68,7 +70,8 @@ It's similar to `cv::split` and `cv::merge`, with 24bit images (RGB), and it per
 	 - processing 1 dimension at time first row by row, then tranpose, second col by col, then transpose back, is more memory and cache friendly since the padding to reflect the borders is done time by time, and trailing zeros are added at the end of the row, thus the plan informations are reused.
 	 
 	 - The big 2D "approach" requires more memory to padd prior each dimension and it's not cache friendly, so it's usually slower, but it's needed when we want the save the output spectrum of the image, I added a macro `#define DFT_image` that skips the convolution and just save the spectrum image  
-	 $$spectrum = 20 log_{10}(| real | + 0.00001) $$ 
+	 $$spectrum = 20 log_{10}(| real | + 0.00001) $$  
+
 
  - pffft
 	  -  doesn't support N dimensions, only 1D, so even if you pass a 2D image, it will be processed as a flattened big row, therefore I adopted the process "for tiles"
