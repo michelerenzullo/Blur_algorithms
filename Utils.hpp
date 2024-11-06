@@ -8,6 +8,7 @@
 #include <memory>
 #include <thread>
 #include <iostream>
+#define L2_CACHE_SIZE (16 * 1024 * 1024)
 //#include <sanitizer/lsan_interface.h>
 
 //typedef emscripten::val em_val;
@@ -160,7 +161,7 @@ void deinterleave_BGR(const T* const interleaved_BGR, U** const deinterleaved_BG
 
 	// Cache-friendly deinterleave BGR, splitting for blocks of 256 KB, inspired by flip-block
 	constexpr float round = std::is_integral_v<U> ? std::is_integral_v<T> ? 0 : 0.5f : 0;
-	constexpr uint32_t block = 262144 / (3 * std::max(sizeof(T), sizeof(U)));
+	constexpr uint32_t block = L2_CACHE_SIZE / (3 * std::max(sizeof(T), sizeof(U)));
     const uint32_t num_blocks = std::ceil(total_size / (float)block);
 	const uint32_t last_block_size = total_size % block == 0 ? block : total_size % block;
 
@@ -186,7 +187,7 @@ template<typename T, typename U>
 void interleave_BGR(const U** const deinterleaved_BGR, T* const interleaved_BGR, const uint32_t total_size) {
 
 	constexpr float round = std::is_integral_v<T> ? std::is_integral_v<U> ? 0 : 0.5f : 0;
-	constexpr uint32_t block = 262144 / (3 * std::max(sizeof(T), sizeof(U)));
+	constexpr uint32_t block = L2_CACHE_SIZE / (3 * std::max(sizeof(T), sizeof(U)));
     const uint32_t num_blocks = std::ceil(total_size / (float)block);
 	const uint32_t last_block_size = total_size % block == 0 ? block : total_size % block;
 	

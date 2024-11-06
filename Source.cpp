@@ -1,22 +1,12 @@
 #include <numeric>
 #include "pffft/pffft.h"
 #include "Utils.hpp"
-// suppose L2 Cache size of 256KB / sizeof(pocketfft_r<float>) --> 256KB / 24
-#define POCKETFFT_CACHE_SIZE 10922
+// suppose L2 Cache size of 16MB M3 PRO / sizeof(pocketfft_r<float>) --> 16MB / 24
+#define POCKETFFT_CACHE_SIZE (L2_CACHE_SIZE / 24)
 #include "pocketfft/pocketfft_hdronly.h"
 #include "FastBoxBlur/fast_box_blur.h"
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/photo/photo.hpp>
-
-
-#ifdef _DEBUG
-#define _CRTDBG_MAP_ALLOC
-#include <stdlib.h>
-#include <crtdbg.h>
-#define DBG_NEW new ( _NORMAL_BLOCK , __FILE__ , __LINE__ )
-#else
-#define DBG_NEW new
-#endif
 
 
 // #define boxblur // if defined all the tests will be performed for a Box Blur
@@ -401,6 +391,41 @@ void pocketfft_1D(cv::Mat& image, double nsmooth)
 
 }
 
+/*template<typename T, typename N>
+void pffft_unsorted_optimized_convolution(std::vector<T, N>& tile_dft, const std::vector<T, N>& kernel_dft, float scaler) {
+	// Do the convolution in the frequency domain without accumulation.
+	// Assuming that:
+	//   - the DFT obtained from pffft is **not** sorted in the conventional way (skip sorting overhead)
+	//   - imaginary part of the centered kernel is 0, which is our case (skip multiplication for imaginay part of the kernel)
+	//   - PFFFT_SIMD_DISABLE IS DEFINED (SIMD instructions swap somehow the real and imaginary parts)
+    const float real_part_kernel_multiplier = kernel_dft[0] * scaler;
+    tile_dft[0] *= real_part_kernel_multiplier;
+    tile_dft[tile_dft.size() - 1] *= real_part_kernel_multiplier;
+
+    for (int i = 1; i < tile_dft.size() / 2; i++) {
+        const int real_part_idx = 2 * i - 1;
+        const int imag_part_idx = 2 * i;
+        const float real_part_kernel_multiplier = kernel_dft[real_part_idx] * scaler;
+        tile_dft[real_part_idx] *= real_part_kernel_multiplier;
+        tile_dft[imag_part_idx] *= real_part_kernel_multiplier;
+    }
+}*/
+
+template<typename T, typename N>
+void pffft_sorted_optimized_convolution(std::vector<T, N>& tile_dft, const std::vector<T, N>& kernel_dft, float scaler) {
+	// Do the convolution in the frequency domain without accumulation.
+	// Assuming that:
+	//   - the DFT obtained from pffft is **sorted** in the conventional way
+	//   - imaginary part of the centered kernel is 0, which is our case (skip multiplication for imaginay part of the kernel)
+    for (int i = 0; i < tile_dft.size() / 2; i++) {
+        const int real_part_idx = 2 * i;
+        const int imag_part_idx = 2 * i + 1;
+        const float real_part_kernel_multiplier = kernel_dft[real_part_idx] * scaler;
+        tile_dft[real_part_idx] *= real_part_kernel_multiplier;
+        tile_dft[imag_part_idx] *= real_part_kernel_multiplier;
+    }
+}
+
 void pffft_(cv::Mat& image, double nsmooth)
 {
 	std::chrono::time_point<std::chrono::steady_clock> start_0 = std::chrono::steady_clock::now();
@@ -435,8 +460,6 @@ void pffft_(cv::Mat& image, double nsmooth)
 	float* BGR[3] = { temp[0].data(), temp[1].data(), temp[2].data() };
 	deinterleave_BGR((const uint8_t*)image.data, BGR, image.size[0] * image.size[1]);
 	
-
-
 	// fast convolve by pffft, without reordering the z-domain. Thus, we perform a row by row, col by col FFT and convolution with 2x1D kernel
 
 	AlignedVector<float> kernel_aligned_1D_row(sizes[1]);
@@ -459,7 +482,7 @@ void pffft_(cv::Mat& image, double nsmooth)
 	tmp.reserve(maxsize);
 	tmp.resize(sizes[1]);
 
-	pffft_transform(rows, kernel_aligned_1D_row.data(), kerf_1D_row.data(), tmp.data(), PFFFT_FORWARD);
+	pffft_transform_ordered(rows, kernel_aligned_1D_row.data(), kerf_1D_row.data(), tmp.data(), PFFFT_FORWARD);
 
 	// calculate the DFT of kernel by col if size of cols is not the same of rows
 	if (sizes[0] != sizes[1]) {
@@ -473,7 +496,7 @@ void pffft_(cv::Mat& image, double nsmooth)
 
 		kerf_1D_col.resize(sizes[0]);
 		tmp.resize(sizes[0]);
-		pffft_transform(cols, kernel_aligned_1D_col.data(), kerf_1D_col.data(), tmp.data(), PFFFT_FORWARD);
+		pffft_transform_ordered(cols, kernel_aligned_1D_col.data(), kerf_1D_col.data(), tmp.data(), PFFFT_FORWARD);
 
 	}
 	else
@@ -505,13 +528,9 @@ void pffft_(cv::Mat& image, double nsmooth)
 			// right reflected pad
 			std::copy_n(std::reverse_iterator(temp[i].data() + (j + 1) * image.size[1] - 1), pad, tile_local.end() - pad /* fft trailing 0s --> */ - trailing_zeros[1]);
 
-
-			pffft_transform(rows, tile_local.data(), work_local.data(), tmp_local.data(), PFFFT_FORWARD);
-
-			// When executing pffft_zconvolve_no_accu inside a parallel for something strange happens internally,
-			// there a few pixels different of 1 compared to when omp parallel is commented out
-			pffft_zconvolve_no_accu(rows, work_local.data(), kerf_1D_row.data(), work_local.data(), divisor_row);
-			pffft_transform(rows, work_local.data(), tile_local.data(), tmp_local.data(), PFFFT_BACKWARD);
+			pffft_transform_ordered(rows, tile_local.data(), work_local.data(), tmp_local.data(), PFFFT_FORWARD);
+			pffft_sorted_optimized_convolution(work_local, kerf_1D_row, divisor_row);
+			pffft_transform_ordered(rows, work_local.data(), tile_local.data(), tmp_local.data(), PFFFT_BACKWARD);
 
 			// save the 1st pass row by row in the output vector
 			std::copy_n(tile_local.begin() + pad, image.size[1], resf.begin() + j * image.size[1]);
@@ -531,10 +550,9 @@ void pffft_(cv::Mat& image, double nsmooth)
 			std::copy_n(temp[i].data() + j * image.size[0], image.size[0], tile_local.begin() + pad);
 			std::copy_n(std::reverse_iterator(temp[i].data() + (j + 1) * image.size[0] - 1), pad, tile_local.end() - pad /* fft trailing 0s --> */ - trailing_zeros[0]);
 
-
-			pffft_transform(cols, tile_local.data(), work_local.data(), tmp_local.data(), PFFFT_FORWARD);
-			pffft_zconvolve_no_accu(cols, work_local.data(), kerf_1D_col.data(), work_local.data(), divisor_col);
-			pffft_transform(cols, work_local.data(), tile_local.data(), tmp_local.data(), PFFFT_BACKWARD);
+			pffft_transform_ordered(cols, tile_local.data(), work_local.data(), tmp_local.data(), PFFFT_FORWARD);
+			pffft_sorted_optimized_convolution(work_local, kerf_1D_col, divisor_col);
+			pffft_transform_ordered(cols, work_local.data(), tile_local.data(), tmp_local.data(), PFFFT_BACKWARD);
 
 			// save the 2nd pass col by col in the output vector 
 			std::copy_n(tile_local.begin() + pad, image.size[0], resf.begin() + j * image.size[0]);
@@ -605,16 +623,16 @@ int main(int argc, char* argv[]) {
 	cv::Mat test_image = cv::imread(file);
 	//cv::resize(test_image, test_image, cv::Size(256, 256));
 	Test(test_image, flag, nsmooth);
-	/*
+	
 	// Benchmark test
-	int x = 1500, y = 1000;
+	/*int x = 1500, y = 1000;
 	for (int i = 0; i < 45; ++i) {
 		cv::resize(test_image, test_image, cv::Size(y, x));
 		Test(test_image, flag, sqrt(x));
 		x += 225, y += 150;
-		if (i == 0) cv::imwrite("C:/Users/miki/Downloads/c_.png", test_image);
-	}*/
-	cv::imwrite("/Users/miki/Downloads/Blur_algorithms/c_.png", test_image);
+		if (i == 0) cv::imwrite("/Users/miki/Downloads/c_.png", test_image);
+	}
+	*/cv::imwrite("/Users/miki/Downloads/c_.png", test_image);
 	test_image.release();
 	
 #ifdef _DEBUG
