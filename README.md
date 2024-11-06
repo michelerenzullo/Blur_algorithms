@@ -18,16 +18,17 @@ Thus this is an alternative to cv::blur and cv::GaussianBlur when OpenCV isn't n
 
 - cv::GaussianBlur has been replaced using two libraries to have a Fast Fourier Convolution
 
-The libraries used are [pffft](https://github.com/marton78/pffft) and [pocketFFT](https://github.com/mreineck/pocketfft)
-For the first, a few sources have to be compiled, the latter is header only. The choice has been made regards to performance, easy to implement and portability, while some libraries might perform better like [fftw](fftw.org/) or Intel MKL, they have many dependencies and the approach is not so straight-forward. 
-The best performance, in order of speed, are obtained trough pffft, pocketfft_1D and least pocketfft_2D convolution with a setted cache of 256KB
+The libraries used are [pffft](https://bitbucket.org/jpommier/pffft/src/master/) and [pocketFFT](https://github.com/mreineck/pocketfft)
+The choice has been made regards to performance, easy to implement and portability, while some libraries might perform better like [fftw](fftw.org/) or Intel MKL, they have many dependencies and the approach is not so straight-forward. 
+The best performance, in order of speed, are obtained trough pffft, pocketfft_2D and least pocketfft_1D convolution with a setted cache of 16MB
 
 ## Common utils and procedures among the implementations:
 
 ### GaussianBlur sigma
  Given a sigma we calculate the expected window size to contain the distribution, clamping the tails, so that  
- $$radius = {σ\sqrt{2log(255)} -1} $$ 
- $$width = {round(2 radius)} $$ I setted a costraint so that the width (aka gaussian_window) has to be inside the biggest dimension, this means that over that we will crop more the tails reducing the accuracy, but it won't make any difference since is just a big color blurred.  
+ $$radius = {σ\sqrt{2log(255)} -1} $$  
+ $$width = {round(2 radius)} $$  
+ I setted a costraint so that the width (aka gaussian_window) has to be inside the biggest dimension, this means that over that we will crop more the tails reducing the accuracy, but it won't make any difference since is just a big color blurred.  
    This limit might be increased further till: 
    ```c++
     (width - 1 ) / 2 <=std::min(rows - 1, cols - 1);
@@ -59,7 +60,7 @@ This function padd an image by reflection mono channel or multi channel with the
 
 ### Deinterleave and Interleave RGB
 This is important because the image is processed as it was single channel.
-It's similar to `cv::split` and `cv::merge`, with 24bit images (RGB), and it performs the operation for sub-blocks, cache friendly, considering a setted L2 cache of 256KB, [gist here](https://gist.github.com/michelerenzullo/76638be18769f2fbf80b96155e6bfea0) . 
+It's similar to `cv::split` and `cv::merge`, with 24bit images (RGB), and it performs the operation for sub-blocks, cache friendly, considering a setted L2 cache of 16MB and can either be compiled with OpenMP or with standard library threads for parallel computing. 
 
 
 ## Differences in the implementations:
@@ -130,15 +131,13 @@ In order to apply the kernel, we are going to do a point wise mul in the frequen
 When the kernel is centered you will notice that his spectrum has the imaginary part 0, therefore when doing the mul with the image spectrum, we will use just the real part of the complex number.
 
 ## Benchmark
-Using an i7-10750H, with 45 images 3 channels from 1500 x 1000 px to 11400 x 7600 px , true Gaussian blur with a sigma of
+Using an M3 Pro 12 cores, with 45 images 3 channels from 1500 x 1000 px to 11400 x 7600 px , true Gaussian blur with a sigma of
 $$sigma = \sqrt{width}$$
-and a setted cache of 262144 bytes for PocketFFT.
+and a setted cache of 16MB (M3 Pro) for PocketFFT.
 
-We can notice **how surprisingly fast** is the 1D implementation in pffft, just 59 ms with a 24 bit image 1500 x 1000 px to 2451 ms with a 24 bit image 11400 x 7600 px, and is linear!
+We can notice **how surprisingly fast** is the 1D implementation in pffft compared to OpenCV that is the standard market reference, also, at each input size increase, the trend is linear for the first, while exponential for the latter.
 
-For comparision I assume that cv::GaussianBlur is the common "standard" and has almost the same performance of pocketfft 1D, but both are like 75 times slower than pffft and having an exponential trend
-
-Pocketfft 2D is quite inefficent and an order of magnitude slower than pffft. 
+PocketFFT 1D and 2D also performs quite well, but the 2D version starts to struggle when having to deal with large amount of memory at time, while the 1D version still remains the most memory friendly and use the full amount of processors available.
 
 Detailed timings are in a jupyter notebook file  py / performance.ipynb
 ![](py/bench.png)
