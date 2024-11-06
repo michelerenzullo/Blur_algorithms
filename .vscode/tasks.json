@@ -7,7 +7,6 @@
         "command": "/usr/bin/clang++",
         "args": [
           "-std=c++2a",
-          //"pffft_pommier/pffft.c",
           "Source.cpp",
           "-IFastBoxBlur",
           "-Ipffft_pommier",
@@ -15,7 +14,6 @@
           "-lpffft",
           "-I/opt/local/include/opencv4",
           "-Ipocketfft",
-          //"-Lpffft/build",
           "-L/opt/local/lib/opencv4",
           "-lopencv_core",
           "-lopencv_imgproc",

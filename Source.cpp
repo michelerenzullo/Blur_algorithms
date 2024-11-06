@@ -1,5 +1,5 @@
 #include <numeric>
-#include "pffft/pffft.h"
+#include "pffft_pommier/pffft.h"
 #include "Utils.hpp"
 // suppose L2 Cache size of 16MB M3 PRO / sizeof(pocketfft_r<float>) --> 16MB / 24
 #define POCKETFFT_CACHE_SIZE (L2_CACHE_SIZE / 24)
