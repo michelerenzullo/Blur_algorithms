@@ -7,3 +7,6 @@
 [submodule "pocketfft"]
 	path = pocketfft
 	url = https://github.com/mreineck/pocketfft
+[submodule "pffft_pommier"]
+	path = pffft_pommier
+	url = https://bitbucket.org/jpommier/pffft.git
